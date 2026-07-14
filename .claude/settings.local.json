@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter *)",
+      "Bash(dart analyze *)",
+      "PowerShell(flutter pub *)",
+      "Bash(dart format *)",
+      "Bash(awk '/connectivity_plus:/{f=1} f && /version:/{print; f=0}' \"C:\\\\Users\\\\naveen\\\\OneDrive\\\\Desktop\\\\VARUNA X\\\\pubspec.lock\")",
+      "Read(//c/Users/naveen/AppData/Local/Pub/Cache/hosted/pub.dev/connectivity_plus-7.2.0/lib/**)",
+      "Bash(xargs grep -lE \"users|role|name\")",
+      "Bash(awk {print NR\": \"$0} *)"
+    ]
+  }
+}

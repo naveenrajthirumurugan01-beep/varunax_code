@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "68017591462",
+    "project_id": "varuna-x-28174",
+    "storage_bucket": "varuna-x-28174.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:68017591462:android:7fac9564e5fa0e9933d067",
+        "android_client_info": {
+          "package_name": "com.digitalrapid.varunax"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCYXl7OsyxX29z9hWGphp_PGv2AiqFjJKQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
