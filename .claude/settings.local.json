@@ -8,7 +8,28 @@
       "Bash(awk '/connectivity_plus:/{f=1} f && /version:/{print; f=0}' \"C:\\\\Users\\\\naveen\\\\OneDrive\\\\Desktop\\\\VARUNA X\\\\pubspec.lock\")",
       "Read(//c/Users/naveen/AppData/Local/Pub/Cache/hosted/pub.dev/connectivity_plus-7.2.0/lib/**)",
       "Bash(xargs grep -lE \"users|role|name\")",
-      "Bash(awk {print NR\": \"$0} *)"
+      "Bash(awk {print NR\": \"$0} *)",
+      "PowerShell(nvidia-smi *)",
+      "PowerShell(py *)",
+      "PowerShell(wsl --status 2>$null; wsl -l -v 2>$null)",
+      "PowerShell(wsl.exe --version)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(\\([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent\\(\\)\\).IsInRole\\([Security.Principal.WindowsBuiltInRole]::Administrator\\))",
+      "WebFetch(domain:download.pytorch.org)",
+      "Bash(curl -s \"https://download.pytorch.org/whl/cu130/torch/\")",
+      "PowerShell(Expand-Archive *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\naveen\\\\OneDrive\\\\Desktop\\\\ml\\\\riwa_data\" -Recurse -Directory | Select-Object -ExpandProperty FullName | ForEach-Object { $_.Replace\\(\"C:\\\\Users\\\\naveen\\\\OneDrive\\\\Desktop\\\\ml\\\\riwa_data\\\\\", \"\"\\) } | Where-Object { \\($_.Split\\(\"\\\\\"\\).Count\\) -le 3 } | Sort-Object)",
+      "WebFetch(domain:pub.dev)",
+      "WebFetch(domain:dart.dev)",
+      "Read(//c/Users/naveen/AppData/Local/Pub/Cache/hosted/pub.dev/**)",
+      "Read(//c//**)",
+      "Bash(git status *)",
+      "Bash(git check-ignore *)",
+      "Bash(mkdir -p \"C:/Users/naveen/OneDrive/Desktop/friend_ml\")",
+      "Bash(mv \"C:/Users/naveen/OneDrive/Desktop/VARUNA X/varunax\" \"C:/Users/naveen/OneDrive/Desktop/friend_ml/varunax\")",
+      "Bash(python -c \"import onnxruntime; print\\(onnxruntime.__version__\\)\")",
+      "Bash(python -m pip install --quiet onnxruntime)",
+      "Bash(python -c ' *)"
     ]
   }
 }

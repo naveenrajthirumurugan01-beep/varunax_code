@@ -4,46 +4,233 @@ import 'package:flutter/material.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
 
-class ReviewScreen extends StatelessWidget {
+String _timeAgo(DateTime dt) {
+  final diff = DateTime.now().difference(dt);
+  if (diff.inSeconds < 60) {
+    return '${diff.inSeconds}s ago';
+  }
+  if (diff.inMinutes < 60) {
+    return '${diff.inMinutes} minute${diff.inMinutes == 1 ? '' : 's'} ago';
+  }
+  if (diff.inHours < 24) {
+    return '${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
+  }
+  return '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
+}
+
+class ReviewScreen extends StatefulWidget {
   const ReviewScreen({super.key});
+
+  @override
+  State<ReviewScreen> createState() => _ReviewScreenState();
+}
+
+class _ReviewScreenState extends State<ReviewScreen> {
+  final Set<String> _seenAlertIds = {};
+  bool _alertsInitialized = false;
+
+  // Compares this snapshot of active alerts against the previous one (tracked
+  // via _seenAlertIds) and pops up a dialog for any reading that wasn't there
+  // before. The very first snapshot just establishes the baseline — otherwise
+  // every pre-existing alert would trigger a popup the moment this screen
+  // opens.
+  void _handleAlertReadings(
+    List<Reading> alertReadings,
+    Map<String, Site> siteById,
+  ) {
+    if (!_alertsInitialized) {
+      _alertsInitialized = true;
+      _seenAlertIds.addAll(alertReadings.map((r) => r.readingId));
+      return;
+    }
+
+    final newAlerts = alertReadings
+        .where((r) => !_seenAlertIds.contains(r.readingId))
+        .toList();
+    if (newAlerts.isEmpty) return;
+
+    _seenAlertIds.addAll(newAlerts.map((r) => r.readingId));
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      for (final reading in newAlerts) {
+        if (!mounted) return;
+        final siteName = siteById[reading.siteId]?.name ?? reading.siteId;
+        await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('⚠️ Water Level Alert'),
+            content: Text(
+              '⚠️ Water Level Alert — $siteName has exceeded its danger '
+              'threshold',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Review Readings')),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('readings')
-            .where('status', isEqualTo: 'pending')
-            .orderBy('timestamp', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Text('Failed to load readings: ${snapshot.error}'),
-            );
-          }
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+        stream: FirebaseFirestore.instance.collection('sites').snapshots(),
+        builder: (context, sitesSnapshot) {
+          final siteDocs = sitesSnapshot.data?.docs ?? [];
+          final siteById = {
+            for (final doc in siteDocs)
+              doc.id: Site.fromMap({...doc.data(), 'siteId': doc.id}),
+          };
 
-          final docs = snapshot.data?.docs ?? [];
-          if (docs.isEmpty) {
-            return const Center(child: Text('No pending readings'));
-          }
+          return Column(
+            children: [
+              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                // Equality filter only (no orderBy on a second field), same
+                // convention used elsewhere in this app to avoid requiring a
+                // composite Firestore index — sorted client-side below.
+                stream: FirebaseFirestore.instance
+                    .collection('readings')
+                    .where('isAlert', isEqualTo: true)
+                    .snapshots(),
+                builder: (context, alertSnapshot) {
+                  final alertDocs = alertSnapshot.data?.docs ?? [];
+                  final alertReadings =
+                      alertDocs
+                          .map(
+                            (doc) => Reading.fromMap({
+                              ...doc.data(),
+                              'readingId': doc.id,
+                            }),
+                          )
+                          .toList()
+                        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
-          final readings = docs
-              .map((doc) => Reading.fromMap({...doc.data(), 'readingId': doc.id}))
-              .toList();
+                  _handleAlertReadings(alertReadings, siteById);
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: readings.length,
-            itemBuilder: (context, index) => _ReadingCard(
-              reading: readings[index],
-            ),
+                  return _AlertBanner(
+                    readings: alertReadings,
+                    siteById: siteById,
+                  );
+                },
+              ),
+              Expanded(
+                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance
+                      .collection('readings')
+                      .where('status', isEqualTo: 'pending')
+                      .orderBy('timestamp', descending: true)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text(
+                          'Failed to load readings: ${snapshot.error}',
+                        ),
+                      );
+                    }
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final docs = snapshot.data?.docs ?? [];
+                    if (docs.isEmpty) {
+                      return const Center(child: Text('No pending readings'));
+                    }
+
+                    final readings = docs
+                        .map(
+                          (doc) => Reading.fromMap({
+                            ...doc.data(),
+                            'readingId': doc.id,
+                          }),
+                        )
+                        .toList();
+
+                    return ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: readings.length,
+                      itemBuilder: (context, index) => _ReadingCard(
+                        reading: readings[index],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _AlertBanner extends StatelessWidget {
+  const _AlertBanner({required this.readings, required this.siteById});
+
+  final List<Reading> readings;
+  final Map<String, Site> siteById;
+
+  @override
+  Widget build(BuildContext context) {
+    if (readings.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      color: Colors.red.shade50,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+              const SizedBox(width: 8),
+              Text(
+                'Active Alerts (${readings.length})',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red.shade700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final reading in readings)
+            _AlertBannerRow(reading: reading, site: siteById[reading.siteId]),
+        ],
+      ),
+    );
+  }
+}
+
+class _AlertBannerRow extends StatelessWidget {
+  const _AlertBannerRow({required this.reading, required this.site});
+
+  final Reading reading;
+  final Site? site;
+
+  @override
+  Widget build(BuildContext context) {
+    final siteName = site?.name ?? reading.siteId;
+    final dangerLevel = site?.dangerLevel;
+    final level = reading.manualLevel ?? reading.aiDetectedLevel;
+    final levelText = level != null ? '${level.toStringAsFixed(1)}m' : '—';
+    final dangerText = dangerLevel != null
+        ? '${dangerLevel.toStringAsFixed(1)}m'
+        : 'unknown';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Text(
+        '⚠️ $siteName: $levelText recorded, exceeds danger level of '
+        '$dangerText — ${_timeAgo(reading.timestamp)}',
+        style: TextStyle(color: Colors.red.shade900),
       ),
     );
   }

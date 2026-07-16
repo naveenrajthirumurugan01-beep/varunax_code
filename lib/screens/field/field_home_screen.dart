@@ -4,11 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
-import '../../models/site_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/sync_service.dart';
-import 'capture_screen.dart';
 import 'history_screen.dart';
+import 'site_picker_screen.dart';
 
 class FieldHomeScreen extends StatefulWidget {
   const FieldHomeScreen({super.key});
@@ -61,7 +60,7 @@ class _FieldHomeScreenState extends State<FieldHomeScreen> {
           ),
         ],
       ),
-      body: _selectedTab == 0 ? const _FieldSiteList() : const HistoryScreen(),
+      body: _selectedTab == 0 ? const _FieldHome() : const HistoryScreen(),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedTab,
         onTap: (index) => setState(() => _selectedTab = index),
@@ -77,8 +76,8 @@ class _FieldHomeScreenState extends State<FieldHomeScreen> {
   }
 }
 
-class _FieldSiteList extends StatelessWidget {
-  const _FieldSiteList();
+class _FieldHome extends StatelessWidget {
+  const _FieldHome();
 
   @override
   Widget build(BuildContext context) {
@@ -124,98 +123,31 @@ class _FieldSiteList extends StatelessWidget {
             },
           ),
         ),
+        // Officers pick their site first; QR scanning then verifies they're
+        // at that specific site rather than being used to discover it.
         Expanded(
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('sites')
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return Center(
-                  child: Text('Failed to load sites: ${snapshot.error}'),
-                );
-              }
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final docs = snapshot.data?.docs ?? [];
-              if (docs.isEmpty) {
-                return const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text(
-                      'No sites available. Contact your supervisor.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                );
-              }
-
-              final sites = docs
-                  .map(
-                    (doc) => Site.fromMap({...doc.data(), 'siteId': doc.id}),
-                  )
-                  .toList();
-
-              return ListView.builder(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                itemCount: sites.length,
-                itemBuilder: (context, index) {
-                  final site = sites[index];
-                  return Card(
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.location_pin,
-                            color: Colors.blueGrey,
-                            size: 32,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  site.name,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${site.siteCode} • ${site.riverName}',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton(
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      CaptureScreen(site: site),
-                                ),
-                              );
-                            },
-                            child: const Text('Submit Reading'),
-                          ),
-                        ],
-                      ),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const SitePickerScreen(),
                     ),
                   );
                 },
-              );
-            },
+                icon: const Icon(Icons.location_on),
+                label: const Text('Submit Reading'),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size(240, 56),
+                  textStyle: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ],

@@ -1,10 +1,8 @@
 
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/site_model.dart';
-import 'capture_screen.dart';
 import 'qr_scan_screen.dart';
 
 class SitePickerScreen extends StatelessWidget {
@@ -16,25 +14,6 @@ class SitePickerScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('Select Site')),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: ElevatedButton.icon(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (context) => const QrScanScreen()),
-                );
-              },
-              icon: const Icon(Icons.qr_code_scanner),
-              label: const Text('Scan QR Code at Site'),
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-              ),
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Divider(),
-          ),
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
@@ -80,7 +59,7 @@ class SitePickerScreen extends StatelessWidget {
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (context) => CaptureScreen(site: site),
+                            builder: (context) => QrScanScreen(site: site),
                           ),
                         );
                       },

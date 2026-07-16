@@ -60,6 +60,11 @@ class AiDetectionService {
   }
 
   void dispose() {
-    _textRecognizer.close();
+    // The recognizer's native side is never initialized on web (see the
+    // kIsWeb guard in detectWaterLevel above), so closing it there throws
+    // MissingPluginException — only close it on platforms where it runs.
+    if (!kIsWeb) {
+      _textRecognizer.close();
+    }
   }
 }

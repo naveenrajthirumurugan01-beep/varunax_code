@@ -71,6 +71,7 @@ class SyncService {
           aiDetectedLevel: pendingReading.aiDetectedLevel,
           status: pendingReading.status,
           supervisorNote: pendingReading.supervisorNote,
+          isAlert: pendingReading.isAlert,
         );
 
         await FirebaseFirestore.instance

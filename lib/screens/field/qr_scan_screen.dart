@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -6,7 +5,9 @@ import '../../models/site_model.dart';
 import 'capture_screen.dart';
 
 class QrScanScreen extends StatefulWidget {
-  const QrScanScreen({super.key});
+  const QrScanScreen({super.key, required this.site});
+
+  final Site site;
 
   @override
   State<QrScanScreen> createState() => _QrScanScreenState();
@@ -36,48 +37,34 @@ class _QrScanScreenState extends State<QrScanScreen> {
     if (rawValue == _lastAttemptedValue && _errorMessage != null) return;
 
     _lastAttemptedValue = rawValue;
-    _lookupSite(rawValue);
+    _verifyScannedCode(rawValue);
   }
 
-  Future<void> _lookupSite(String qrCode) async {
+  Future<void> _verifyScannedCode(String qrCode) async {
     setState(() {
       _isProcessing = true;
       _errorMessage = null;
     });
 
-    try {
-      final query = await FirebaseFirestore.instance
-          .collection('sites')
-          .where('qrCode', isEqualTo: qrCode)
-          .limit(1)
-          .get();
-
-      if (!mounted) return;
-
-      if (query.docs.isEmpty) {
-        setState(() {
-          _isProcessing = false;
-          _errorMessage = "QR code doesn't match any known site";
-        });
-        return;
-      }
-
-      final doc = query.docs.first;
-      final site = Site.fromMap({...doc.data(), 'siteId': doc.id});
-
-      await _controller.stop();
-
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => CaptureScreen(site: site)),
-      );
-    } catch (e) {
+    if (qrCode != widget.site.qrCode) {
       if (!mounted) return;
       setState(() {
         _isProcessing = false;
-        _errorMessage = 'Failed to look up site: $e';
+        _errorMessage =
+            "This QR code doesn't match ${widget.site.name}. Please scan "
+            "the correct site's code.";
       });
+      return;
     }
+
+    await _controller.stop();
+
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => CaptureScreen(site: widget.site),
+      ),
+    );
   }
 
   void _retry() {
@@ -87,59 +74,89 @@ class _QrScanScreenState extends State<QrScanScreen> {
     });
   }
 
+  void _useManualEntry() {
+    // The officer already chose this site from the list before reaching
+    // this screen, so the fallback skips the QR check entirely rather than
+    // showing a second site picker.
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => CaptureScreen(site: widget.site),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Scan Site QR Code')),
-      body: Stack(
+      body: Column(
         children: [
-          MobileScanner(controller: _controller, onDetect: _handleDetect),
-          if (_isProcessing)
-            const ColoredBox(
-              color: Colors.black54,
-              child: Center(child: CircularProgressIndicator()),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Text(
+              'Scan QR code for: ${widget.site.name}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
-          if (_errorMessage != null)
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 96,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.black87,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _errorMessage!,
-                      style: const TextStyle(color: Colors.white),
-                      textAlign: TextAlign.center,
+          ),
+          Expanded(
+            child: Stack(
+              children: [
+                MobileScanner(controller: _controller, onDetect: _handleDetect),
+                if (_isProcessing)
+                  const ColoredBox(
+                    color: Colors.black54,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                if (_errorMessage != null)
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 16,
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _errorMessage!,
+                            style: const TextStyle(color: Colors.white),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 12),
+                          ElevatedButton.icon(
+                            onPressed: _retry,
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Try Again'),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      onPressed: _retry,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Try Again'),
-                    ),
-                  ],
-                ),
-              ),
+                  ),
+              ],
             ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 24,
-            child: Center(
+          ),
+          // Deliberately understated — an exception path for a damaged or
+          // missing QR code, not an equal alternative to scanning.
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
               child: TextButton(
+                onPressed: _useManualEntry,
                 style: TextButton.styleFrom(
-                  backgroundColor: Colors.black54,
-                  foregroundColor: Colors.white,
+                  foregroundColor: Colors.grey.shade600,
                 ),
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Enter site manually instead'),
+                child: const Text(
+                  'QR code damaged or missing? Use manual entry',
+                  style: TextStyle(fontSize: 12),
+                ),
               ),
             ),
           ),

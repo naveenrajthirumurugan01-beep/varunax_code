@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/auth_service.dart';
+import 'history_screen.dart';
 import 'review_screen.dart';
 
 class SupervisorHomeScreen extends StatelessWidget {
@@ -25,14 +26,33 @@ class SupervisorHomeScreen extends StatelessWidget {
         ],
       ),
       body: Center(
-        child: ElevatedButton.icon(
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (context) => const ReviewScreen()),
-            );
-          },
-          icon: const Icon(Icons.fact_check),
-          label: const Text('Review Readings'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const ReviewScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.fact_check),
+              label: const Text('Review Readings'),
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const HistoryScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.history),
+              label: const Text('History'),
+            ),
+          ],
         ),
       ),
     );

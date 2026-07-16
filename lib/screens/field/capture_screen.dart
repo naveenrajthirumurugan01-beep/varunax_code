@@ -11,11 +11,14 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
+import '../../models/weather_reading_model.dart';
 import '../../services/ai_detection_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cloudinary_service.dart';
 import '../../services/location_service.dart';
+import '../../services/segmentation_service.dart';
 import '../../services/sync_service.dart';
+import '../../services/weather_service.dart';
 
 enum _CaptureStage {
   checkingLocation,
@@ -37,6 +40,7 @@ class CaptureScreen extends StatefulWidget {
 class _CaptureScreenState extends State<CaptureScreen> {
   final _locationService = LocationService();
   final _aiDetectionService = AiDetectionService();
+  final _segmentationService = SegmentationService();
   final _levelController = TextEditingController();
 
   _CaptureStage _stage = _CaptureStage.checkingLocation;
@@ -53,6 +57,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   bool _isDetectingLevel = false;
   double? _aiDetectedLevel;
+
+  bool _isDetectingWaterLine = false;
+  double? _aiDetectedWaterLinePercent;
+
+  // Tracks whether the level field currently holds a value we filled in from
+  // AI detection (vs one the officer typed) so the UI knows whether to show
+  // the "please verify" label and whether a later detection is still allowed
+  // to overwrite the field.
+  bool _isLevelAutoFilled = false;
+  bool _userEditedLevel = false;
 
   double? get _parsedLevel => double.tryParse(_levelController.text.trim());
 
@@ -73,6 +87,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
     _cameraController?.dispose();
     _levelController.dispose();
     _aiDetectionService.dispose();
+    _segmentationService.dispose();
     super.dispose();
   }
 
@@ -169,6 +184,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _stage = _CaptureStage.preview;
       });
       unawaited(_runAiDetection(photo.path));
+      unawaited(_runSegmentation(photo.path));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -199,8 +215,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _isDetectingLevel = false;
       _aiDetectedLevel = detected;
-      if (detected != null) {
+      // OCR is the more reliable signal, so it always wins over the
+      // segmentation estimate below (even if segmentation already auto-filled
+      // the field first) — but never clobber a value the officer typed in
+      // themselves while detection was still running.
+      if (detected != null && !_userEditedLevel) {
         _levelController.text = _formatLevel(detected);
+        _isLevelAutoFilled = true;
       }
     });
   }
@@ -211,6 +232,37 @@ class _CaptureScreenState extends State<CaptureScreen> {
         : value.toString();
   }
 
+  // ---- AI-assisted water-line segmentation ----
+  //
+  // Runs the bundled ONNX segmentation model in the background right after a
+  // photo is taken, alongside the OCR detection above. Also only ever a
+  // suggestion for the officer to verify.
+
+  Future<void> _runSegmentation(String imagePath) async {
+    // onnxruntime has no web implementation, so skip detection entirely on
+    // web rather than let it fail.
+    if (kIsWeb) return;
+
+    setState(() {
+      _isDetectingWaterLine = true;
+    });
+
+    final result = await _segmentationService.detectWaterLevel(imagePath);
+
+    if (!mounted) return;
+    setState(() {
+      _isDetectingWaterLine = false;
+      _aiDetectedWaterLinePercent = result?.waterLinePercent;
+      // Only fall back to the segmentation estimate when OCR hasn't already
+      // produced a value (OCR takes priority whenever it's available) and
+      // the officer hasn't already typed something in themselves.
+      if (result != null && _aiDetectedLevel == null && !_userEditedLevel) {
+        _levelController.text = _formatLevel(result.waterLinePercent);
+        _isLevelAutoFilled = true;
+      }
+    });
+  }
+
   void _retake() {
     setState(() {
       _capturedPhoto = null;
@@ -218,6 +270,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
       _stage = _CaptureStage.camera;
       _isDetectingLevel = false;
       _aiDetectedLevel = null;
+      _isDetectingWaterLine = false;
+      _aiDetectedWaterLinePercent = null;
+      _isLevelAutoFilled = false;
+      _userEditedLevel = false;
     });
   }
 
@@ -236,6 +292,23 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _isSaving = true;
     });
+
+    // level (manualLevel) is guaranteed non-null by the early return above,
+    // so there's no case here where falling back to the AI-detected value is
+    // reachable — dart's null-safety already proves that invariant.
+    final isAlert = level >= widget.site.dangerLevel;
+
+    // Fire-and-forget: accumulates a paired rainfall/water-level dataset for
+    // a future flood prediction model, but must never block or fail the
+    // reading submission itself — recordWeatherForSite already swallows its
+    // own errors (no connectivity, API failure, etc).
+    unawaited(
+      WeatherService().recordWeatherForSite(
+        widget.site.siteId,
+        widget.site.latitude,
+        widget.site.longitude,
+      ),
+    );
 
     // Everything from the connectivity check onward is now inside one
     // try/catch — previously the connectivity check and the offline-save
@@ -263,6 +336,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
           aiDetectedLevel: _aiDetectedLevel,
           status: 'pending',
           supervisorNote: null,
+          isAlert: isAlert,
         );
 
         await SyncService().saveReadingOffline(offlineReading, photo.path);
@@ -310,6 +384,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         aiDetectedLevel: _aiDetectedLevel,
         status: 'pending',
         supervisorNote: null,
+        isAlert: isAlert,
       );
 
       await readingRef.set(reading.toMap());
@@ -431,7 +506,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
                 labelText: 'Enter level in meters',
                 border: OutlineInputBorder(),
               ),
-              onChanged: (_) => setState(() {}),
+              onChanged: (_) => setState(() {
+                _userEditedLevel = true;
+              }),
             ),
             if (kIsWeb) ...[
               const SizedBox(height: 8),
@@ -448,42 +525,79 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   ),
                 ],
               ),
-            ] else if (_isDetectingLevel) ...[
-              const SizedBox(height: 8),
-              const Row(
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  SizedBox(width: 8),
-                  Text(
-                    'Analyzing gauge reading...',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              ),
-            ] else if (_aiDetectedLevel != null) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(
-                    Icons.auto_awesome,
-                    size: 14,
-                    color: Colors.blue.shade600,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'AI suggested — please verify',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
+            ] else ...[
+              if (_isDetectingLevel) ...[
+                const SizedBox(height: 8),
+                const Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Analyzing gauge reading...',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ],
+              if (_isDetectingWaterLine) ...[
+                const SizedBox(height: 8),
+                const Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Analyzing water line...',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ],
+              if (_isLevelAutoFilled && !_userEditedLevel) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.auto_awesome,
+                      size: 14,
                       color: Colors.blue.shade600,
                     ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Auto-filled by AI — please verify before submitting',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.blue.shade600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                // Segmentation only reports where the water line falls within
+                // the frame, not a calibrated meters value, so when it's the
+                // one that filled the field (OCR didn't produce a value),
+                // spell that out rather than letting the officer think it's
+                // a real gauge reading.
+                if (_aiDetectedLevel == null &&
+                    _aiDetectedWaterLinePercent != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Estimated from image analysis — water line detected at '
+                    '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
+                    'frame height, not a calibrated gauge reading.',
+                    style: TextStyle(fontSize: 11, color: Colors.blue.shade400),
                   ),
                 ],
-              ),
+              ],
             ],
             const SizedBox(height: 12),
             Text(
@@ -607,20 +721,75 @@ class _CaptureScreenState extends State<CaptureScreen> {
         if (snapshot.hasError) {
           return Center(child: Text('Camera error: ${snapshot.error}'));
         }
+
         return Stack(
           alignment: Alignment.bottomCenter,
           children: [
-            Positioned.fill(child: CameraPreview(controller)),
+            Positioned.fill(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // CameraPreview has no built-in "cover" mode — it only
+                  // ever letterboxes to controller.value.aspectRatio (unlike
+                  // MobileScanner on the QR screen, which crops to fill on
+                  // its own). Earlier attempts here tried to force a "cover"
+                  // shape by handing CameraPreview a pre-computed pixel-size
+                  // SizedBox, but that gives it *tight* constraints, leaving
+                  // its own internal orientation-correcting AspectRatio no
+                  // room to act — so it rendered at whatever (wrong) shape
+                  // was guessed. This instead lets AspectRatio size the
+                  // preview at its own correct, natural size first, then
+                  // uniformly scales that correct box up with Transform.scale
+                  // until it covers the screen, clipping the overscan with
+                  // ClipRect — the same technique the camera plugin's own
+                  // example app uses for a full-bleed preview.
+                  final size = constraints.biggest;
+                  var scale = size.aspectRatio * controller.value.aspectRatio;
+                  if (scale < 1) scale = 1 / scale;
+
+                  return ClipRect(
+                    child: Transform.scale(
+                      scale: scale,
+                      child: Center(
+                        child: AspectRatio(
+                          aspectRatio: controller.value.aspectRatio,
+                          child: CameraPreview(controller),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
             Padding(
               padding: const EdgeInsets.only(bottom: 32),
-              child: FloatingActionButton(
-                onPressed: _takePicture,
-                child: const Icon(Icons.camera),
-              ),
+              child: _buildShutterButton(),
             ),
           ],
         );
       },
+    );
+  }
+
+  Widget _buildShutterButton() {
+    return Material(
+      color: Colors.transparent,
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: _takePicture,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: 76,
+          height: 76,
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 4),
+          ),
+          child: const DecoratedBox(
+            decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white),
+          ),
+        ),
+      ),
     );
   }
 
@@ -654,6 +823,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
           SizedBox(height: 350, child: photoPreview),
           const SizedBox(height: 12),
           _buildWaterLevelCard(),
+          const SizedBox(height: 12),
+          _SiteWeatherCard(site: widget.site),
           const SizedBox(height: 16),
           _isSaving
               ? const Row(
@@ -686,6 +857,93 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   ],
                 ),
         ],
+      ),
+    );
+  }
+}
+
+/// Shows the site's most recent recorded weather (same `weather_data`
+/// collection and shape as the analyst dashboard's weather section) on the
+/// photo review screen, right next to the AI-suggested reading. If no
+/// weather has ever been recorded for this site, kicks off one fresh fetch
+/// via [WeatherService] as soon as the data is confirmed missing.
+class _SiteWeatherCard extends StatefulWidget {
+  const _SiteWeatherCard({required this.site});
+
+  final Site site;
+
+  @override
+  State<_SiteWeatherCard> createState() => _SiteWeatherCardState();
+}
+
+class _SiteWeatherCardState extends State<_SiteWeatherCard> {
+  bool _hasTriggeredFetch = false;
+
+  void _fetchWeather() {
+    _hasTriggeredFetch = true;
+    unawaited(
+      WeatherService().recordWeatherForSite(
+        widget.site.siteId,
+        widget.site.latitude,
+        widget.site.longitude,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('weather_data')
+              .where('siteId', isEqualTo: widget.site.siteId)
+              .snapshots(),
+          builder: (context, snapshot) {
+            final docs = snapshot.data?.docs ?? [];
+            final readings =
+                docs.map((doc) => WeatherReading.fromMap(doc.data())).toList()
+                  ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+            final latest = readings.isNotEmpty ? readings.first : null;
+
+            if (latest == null &&
+                !_hasTriggeredFetch &&
+                snapshot.connectionState != ConnectionState.waiting) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _fetchWeather();
+              });
+            }
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Current Weather at Site',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (latest == null)
+                  const Text('No weather data recorded yet — fetching...')
+                else ...[
+                  Text(
+                    'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
+                    '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
+                  ),
+                  Text(
+                    'Temperature: ${latest.temperature.toStringAsFixed(1)}°C',
+                  ),
+                  Text('Humidity: ${latest.humidity.toStringAsFixed(0)}%'),
+                  Text('Conditions: ${latest.weatherDescription}'),
+                ],
+              ],
+            );
+          },
+        ),
       ),
     );
   }
