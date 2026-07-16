@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+# --- Custom ML Rules ---
+varunax/env/
+varunax/venv/
+varunax/__pycache__/
+varunax/*.pyc
+varunax/your_dataset/
+varunax/dataset_clean/
+varunax/*.zip
