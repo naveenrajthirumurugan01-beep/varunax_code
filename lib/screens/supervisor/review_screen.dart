@@ -319,6 +319,40 @@ class _ReadingCard extends StatelessWidget {
               '${reading.longitude.toStringAsFixed(5)}',
             ),
             _LevelComparison(reading: reading),
+            if (reading.isSubmerged) ...[
+              const SizedBox(height: 6),
+              const Row(
+                children: [
+                  Icon(Icons.warning, color: Colors.red, size: 16),
+                  SizedBox(width: 6),
+                  Text(
+                    'Gauge Submerged! (Water at/above top of post)',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (reading.isBlurryOrDark) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(Icons.image, color: Colors.orange.shade700, size: 16),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Quality Issue: Image flagged as blurry or dark',
+                    style: TextStyle(
+                      color: Colors.orange.shade700,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [

@@ -11,6 +11,8 @@ class Reading {
   final String status;
   final String? supervisorNote;
   final bool isAlert;
+  final bool isSubmerged;
+  final bool isBlurryOrDark;
 
   Reading({
     required this.readingId,
@@ -25,6 +27,8 @@ class Reading {
     required this.status,
     this.supervisorNote,
     this.isAlert = false,
+    this.isSubmerged = false,
+    this.isBlurryOrDark = false,
   });
 
   factory Reading.fromMap(Map<String, dynamic> map) {
@@ -43,6 +47,8 @@ class Reading {
       status: map['status'] as String,
       supervisorNote: map['supervisorNote'] as String?,
       isAlert: map['isAlert'] as bool? ?? false,
+      isSubmerged: map['isSubmerged'] as bool? ?? false,
+      isBlurryOrDark: map['isBlurryOrDark'] as bool? ?? false,
     );
   }
 
@@ -60,6 +66,8 @@ class Reading {
       'status': status,
       'supervisorNote': supervisorNote,
       'isAlert': isAlert,
+      'isSubmerged': isSubmerged,
+      'isBlurryOrDark': isBlurryOrDark,
     };
   }
 }

@@ -15,6 +15,7 @@ import '../../models/weather_reading_model.dart';
 import '../../services/ai_detection_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cloudinary_service.dart';
+import '../../services/image_quality_service.dart';
 import '../../services/location_service.dart';
 import '../../services/segmentation_service.dart';
 import '../../services/sync_service.dart';
@@ -67,6 +68,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
   // to overwrite the field.
   bool _isLevelAutoFilled = false;
   bool _userEditedLevel = false;
+  double? _aiCalibratedSegmentationLevel;
+  bool _isSubmerged = false;
+  bool _isBlurryOrDark = false;
 
   double? get _parsedLevel => double.tryParse(_levelController.text.trim());
 
@@ -183,6 +187,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _capturedPhotoBytes = bytes;
         _stage = _CaptureStage.preview;
       });
+      unawaited(_checkImageQuality(photo.path));
       unawaited(_runAiDetection(photo.path));
       unawaited(_runSegmentation(photo.path));
     } catch (e) {
@@ -190,6 +195,24 @@ class _CaptureScreenState extends State<CaptureScreen> {
       setState(() {
         _errorMessage = 'Failed to capture photo: $e';
       });
+    }
+  }
+
+  Future<void> _checkImageQuality(String imagePath) async {
+    final result = await ImageQualityService().analyzeImage(imagePath);
+    if (!mounted) return;
+    setState(() {
+      _isBlurryOrDark = result.isBlurry || result.isDark;
+    });
+    if (_isBlurryOrDark) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '⚠️ Warning: Image appears blurry or too dark. Please consider retaking for an accurate reading.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 
@@ -253,12 +276,20 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _isDetectingWaterLine = false;
       _aiDetectedWaterLinePercent = result?.waterLinePercent;
-      // Only fall back to the segmentation estimate when OCR hasn't already
-      // produced a value (OCR takes priority whenever it's available) and
-      // the officer hasn't already typed something in themselves.
-      if (result != null && _aiDetectedLevel == null && !_userEditedLevel) {
-        _levelController.text = _formatLevel(result.waterLinePercent);
-        _isLevelAutoFilled = true;
+      if (result != null) {
+        final calibrated = widget.site.getCalibratedLevel(result.waterLinePercent);
+        _aiCalibratedSegmentationLevel = calibrated;
+
+        // If water reaches the top of the frame (waterLinePercent <= 5%) and OCR fails,
+        // flag the gauge post as submerged and default level to max calibrated point.
+        if (result.waterLinePercent <= 5.0 && _aiDetectedLevel == null) {
+          _isSubmerged = true;
+        }
+
+        if (_aiDetectedLevel == null && !_userEditedLevel) {
+          _levelController.text = _formatLevel(_isSubmerged ? (widget.site.maxGaugeHeight ?? widget.site.dangerLevel * 1.15) : calibrated);
+          _isLevelAutoFilled = true;
+        }
       }
     });
   }
@@ -274,6 +305,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
       _aiDetectedWaterLinePercent = null;
       _isLevelAutoFilled = false;
       _userEditedLevel = false;
+      _aiCalibratedSegmentationLevel = null;
+      _isSubmerged = false;
+      _isBlurryOrDark = false;
     });
   }
 
@@ -333,10 +367,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
           longitude: _userLongitude!,
           photoUrl: '',
           manualLevel: level,
-          aiDetectedLevel: _aiDetectedLevel,
+          aiDetectedLevel: _aiDetectedLevel ?? _aiCalibratedSegmentationLevel,
           status: 'pending',
           supervisorNote: null,
           isAlert: isAlert,
+          isSubmerged: _isSubmerged,
+          isBlurryOrDark: _isBlurryOrDark,
         );
 
         await SyncService().saveReadingOffline(offlineReading, photo.path);
@@ -381,10 +417,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         longitude: _userLongitude!,
         photoUrl: photoUrl,
         manualLevel: level,
-        aiDetectedLevel: _aiDetectedLevel,
+        aiDetectedLevel: _aiDetectedLevel ?? _aiCalibratedSegmentationLevel,
         status: 'pending',
         supervisorNote: null,
         isAlert: isAlert,
+        isSubmerged: _isSubmerged,
+        isBlurryOrDark: _isBlurryOrDark,
       );
 
       await readingRef.set(reading.toMap());
@@ -582,21 +620,39 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     ),
                   ],
                 ),
-                // Segmentation only reports where the water line falls within
-                // the frame, not a calibrated meters value, so when it's the
-                // one that filled the field (OCR didn't produce a value),
-                // spell that out rather than letting the officer think it's
-                // a real gauge reading.
                 if (_aiDetectedLevel == null &&
                     _aiDetectedWaterLinePercent != null) ...[
                   const SizedBox(height: 4),
                   Text(
-                    'Estimated from image analysis — water line detected at '
+                    'Calibrated from image analysis — water line detected at '
                     '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
-                    'frame height, not a calibrated gauge reading.',
+                    'frame height.',
                     style: TextStyle(fontSize: 11, color: Colors.blue.shade400),
                   ),
                 ],
+              ],
+              if (_isSubmerged) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.warning,
+                      size: 16,
+                      color: Colors.red,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '⚠️ Submerged Gauge Warning: Water level appears to be at or above the top of the gauge post! Severe flood risk.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ],
             const SizedBox(height: 12),
@@ -722,49 +778,55 @@ class _CaptureScreenState extends State<CaptureScreen> {
           return Center(child: Text('Camera error: ${snapshot.error}'));
         }
 
-        return Stack(
-          alignment: Alignment.bottomCenter,
-          children: [
-            Positioned.fill(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // CameraPreview has no built-in "cover" mode — it only
-                  // ever letterboxes to controller.value.aspectRatio (unlike
-                  // MobileScanner on the QR screen, which crops to fill on
-                  // its own). Earlier attempts here tried to force a "cover"
-                  // shape by handing CameraPreview a pre-computed pixel-size
-                  // SizedBox, but that gives it *tight* constraints, leaving
-                  // its own internal orientation-correcting AspectRatio no
-                  // room to act — so it rendered at whatever (wrong) shape
-                  // was guessed. This instead lets AspectRatio size the
-                  // preview at its own correct, natural size first, then
-                  // uniformly scales that correct box up with Transform.scale
-                  // until it covers the screen, clipping the overscan with
-                  // ClipRect — the same technique the camera plugin's own
-                  // example app uses for a full-bleed preview.
-                  final size = constraints.biggest;
-                  var scale = size.aspectRatio * controller.value.aspectRatio;
-                  if (scale < 1) scale = 1 / scale;
+        return SizedBox.expand(
+          child: Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              Positioned.fill(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // CameraPreview has no built-in "cover" mode — it only
+                    // ever letterboxes to controller.value.aspectRatio (unlike
+                    // MobileScanner on the QR screen, which crops to fill on
+                    // its own). Earlier attempts here tried to force a "cover"
+                    // shape by handing CameraPreview a pre-computed pixel-size
+                    // SizedBox, but that gives it *tight* constraints, leaving
+                    // its own internal orientation-correcting AspectRatio no
+                    // room to act — so it rendered at whatever (wrong) shape
+                    // was guessed. This instead lets AspectRatio size the
+                    // preview at its own correct, natural size first, then
+                    // uniformly scales that correct box up with Transform.scale
+                    // until it covers the screen, clipping the overscan with
+                    // ClipRect — the same technique the camera plugin's own
+                    // example app uses for a full-bleed preview.
+                    final size = constraints.biggest;
+                    var cameraAspectRatio = controller.value.aspectRatio;
+                    if (MediaQuery.of(context).orientation == Orientation.portrait) {
+                      cameraAspectRatio = 1 / cameraAspectRatio;
+                    }
+                    var scale = size.aspectRatio / cameraAspectRatio;
+                    if (scale < 1) scale = 1 / scale;
 
-                  return ClipRect(
-                    child: Transform.scale(
-                      scale: scale,
-                      child: Center(
-                        child: AspectRatio(
-                          aspectRatio: controller.value.aspectRatio,
-                          child: CameraPreview(controller),
+                    return ClipRect(
+                      child: Transform.scale(
+                        scale: scale,
+                        child: Center(
+                          child: AspectRatio(
+                            aspectRatio: cameraAspectRatio,
+                            child: CameraPreview(controller),
+                          ),
                         ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 32),
-              child: _buildShutterButton(),
-            ),
-          ],
+              Positioned(
+                bottom: 32,
+                child: _buildShutterButton(),
+              ),
+            ],
+          ),
         );
       },
     );

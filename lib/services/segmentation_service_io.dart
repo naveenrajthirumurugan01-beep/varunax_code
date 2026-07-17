@@ -92,8 +92,9 @@ class SegmentationService {
       final runOptions = OrtRunOptions();
 
       try {
+        final inputName = session.inputNames.isNotEmpty ? session.inputNames.first : 'input';
         final outputs = await session.runAsync(runOptions, {
-          'input': inputOrt,
+          inputName: inputOrt,
         });
         if (outputs == null || outputs.isEmpty) return null;
 
@@ -108,12 +109,14 @@ class SegmentationService {
         final logits = (outputValue as List)[0][0] as List;
 
         // Binary water mask via sigmoid(logit) > 0.5, equivalent to
-        // logit > 0 — find the topmost row containing any water pixel,
-        // i.e. the visual water line.
+        // logit > 0. Require at least 25 pixels (approx 10% of the 256 width) 
+        // in a row to be classified as water to prevent isolated noise or 
+        // reflections from triggering false high water readings.
         int? waterLineRow;
         for (var y = 0; y < _inputSize; y++) {
           final row = logits[y] as List;
-          if (row.any((v) => (v as num) > 0)) {
+          final waterPixelCount = row.where((v) => (v as num) > 0).length;
+          if (waterPixelCount >= 25) {
             waterLineRow = y;
             break;
           }
