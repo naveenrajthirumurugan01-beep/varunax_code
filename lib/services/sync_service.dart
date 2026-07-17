@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -5,7 +6,9 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../models/reading_model.dart';
+import '../models/site_model.dart';
 import 'cloudinary_service.dart';
+import 'push_sender_service.dart';
 
 class SyncService {
   static const String pendingReadingsBoxName = 'pending_readings';
@@ -72,6 +75,7 @@ class SyncService {
           status: pendingReading.status,
           supervisorNote: pendingReading.supervisorNote,
           isAlert: pendingReading.isAlert,
+          phLevel: pendingReading.phLevel,
         );
 
         await FirebaseFirestore.instance
@@ -79,10 +83,42 @@ class SyncService {
             .doc(syncedReading.readingId)
             .set(syncedReading.toMap());
 
+        if (syncedReading.isAlert) {
+          // Fire-and-forget: must never block or fail the sync pass that
+          // triggered it.
+          unawaited(_sendAlertPushForSite(syncedReading));
+        }
+
         await box.delete(key);
       } catch (_) {
         // Leave this entry in the box; it will retry on the next sync pass.
       }
+    }
+  }
+
+  /// Looks up the reading's site for its name/danger level (not carried on
+  /// the offline reading itself) and sends the alert push. Swallows its own
+  /// errors — called fire-and-forget from a background sync pass.
+  Future<void> _sendAlertPushForSite(Reading reading) async {
+    try {
+      final siteDoc = await FirebaseFirestore.instance
+          .collection('sites')
+          .doc(reading.siteId)
+          .get();
+      final data = siteDoc.data();
+      if (data == null) return;
+
+      final level = reading.manualLevel ?? reading.aiDetectedLevel;
+      if (level == null) return;
+
+      final site = Site.fromMap({...data, 'siteId': siteDoc.id});
+      await PushSenderService().sendAlertPush(
+        site.name,
+        level,
+        site.dangerLevel,
+      );
+    } catch (_) {
+      // Best-effort only; never let a push failure affect sync.
     }
   }
 }

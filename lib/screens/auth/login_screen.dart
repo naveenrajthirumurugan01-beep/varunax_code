@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/theme.dart';
 import '../../models/site_model.dart';
 import '../../services/auth_service.dart';
+import '../../services/notification_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -42,6 +46,9 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       final uid = credential.user!.uid;
+      // Fire-and-forget, now that we know who's signed in — must never
+      // block or fail the login flow if push registration has trouble.
+      unawaited(NotificationService().initialize());
       final doc =
           await FirebaseFirestore.instance.collection('users').doc(uid).get();
       final role = doc.data()?['role'] as String?;
@@ -307,76 +314,162 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
     return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+      backgroundColor: Colors.white,
+      body: Column(
+        children: [
+          // Top section: solid primary-blue banner with the app title/subtitle.
+          // Padded manually (rather than SafeArea) so the blue extends behind
+          // the status bar while its content still clears it.
+          Container(
+            width: double.infinity,
+            color: AppColors.primary,
+            padding: EdgeInsets.fromLTRB(
+              24,
+              MediaQuery.paddingOf(context).top + 48,
+              24,
+              40,
+            ),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'Varuna X',
+                Text(
+                  'VARUNA X',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 32),
-                TextField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  enabled: !_isLoading,
-                  decoration: const InputDecoration(
-                    labelText: 'Email',
-                    border: OutlineInputBorder(),
+                  style: textTheme.headlineLarge?.copyWith(
+                    color: AppColors.onPrimary,
                   ),
                 ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _passwordController,
-                  obscureText: true,
-                  enabled: !_isLoading,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    border: OutlineInputBorder(),
+                const SizedBox(height: 8),
+                Text(
+                  'Smart River Water Level Monitoring',
+                  textAlign: TextAlign.center,
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: AppColors.secondaryContainer,
                   ),
                 ),
-                const SizedBox(height: 24),
-                if (_errorMessage != null) ...[
-                  Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.red),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                if (_isLoading)
-                  const Center(child: CircularProgressIndicator())
-                else
-                  ElevatedButton(
-                    onPressed: _login,
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      child: Text('Log In'),
-                    ),
-                  ),
-                if (kDebugMode) ...[
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: _isSeeding ? null : _seedTestSites,
-                    child: _isSeeding
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Seed Test Sites (Debug)'),
-                  ),
-                ],
               ],
             ),
           ),
-        ),
+          // White card with rounded top corners, holding the actual login
+          // form. Its own SingleChildScrollView keeps the fields reachable
+          // when the keyboard is open, without disturbing the fixed banner.
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(AppSpacing.radiusCard),
+                  topRight: Radius.circular(AppSpacing.radiusCard),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Secure Access',
+                        textAlign: TextAlign.center,
+                        style: textTheme.headlineLarge?.copyWith(
+                          color: AppColors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Enter your credentials to monitor field data.',
+                        textAlign: TextAlign.center,
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: AppColors.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      Text('Email Address', style: textTheme.labelMedium),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        enabled: !_isLoading,
+                        decoration: const InputDecoration(
+                          hintText: 'you@example.com',
+                          prefixIcon: Icon(Icons.mail_outline),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text('Password', style: textTheme.labelMedium),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _passwordController,
+                        obscureText: true,
+                        enabled: !_isLoading,
+                        decoration: const InputDecoration(
+                          hintText: '••••••••',
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      if (_errorMessage != null) ...[
+                        Text(
+                          _errorMessage!,
+                          style: TextStyle(color: AppColors.error),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      if (_isLoading)
+                        const Center(child: CircularProgressIndicator())
+                      else
+                        ElevatedButton(
+                          onPressed: _login,
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text('Login'),
+                              SizedBox(width: 8),
+                              Icon(Icons.arrow_forward, size: 18),
+                            ],
+                          ),
+                        ),
+                      if (kDebugMode) ...[
+                        const SizedBox(height: 16),
+                        Center(
+                          child: TextButton(
+                            onPressed: _isSeeding ? null : _seedTestSites,
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.onSurfaceVariant,
+                              minimumSize: Size.zero,
+                              padding: EdgeInsets.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: _isSeeding
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Text(
+                                    'Seed Test Sites (Debug)',
+                                    style: textTheme.labelSmall?.copyWith(
+                                      color: AppColors.onSurfaceVariant,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

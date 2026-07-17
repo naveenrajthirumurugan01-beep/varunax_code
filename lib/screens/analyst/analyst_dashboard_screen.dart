@@ -2,13 +2,17 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/theme.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
 import '../../models/weather_reading_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/weather_service.dart';
+import '../../utils/report_generator.dart';
 
 const _statusOptions = ['All', 'Pending', 'Approved', 'Rejected'];
+
+enum _DashboardTab { overview, detailed }
 
 Color _statusColor(String status) {
   switch (status.toLowerCase()) {
@@ -57,6 +61,7 @@ class AnalystDashboardScreen extends StatefulWidget {
 class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   String _statusFilter = 'All';
   String? _siteFilterId;
+  _DashboardTab _activeTab = _DashboardTab.overview;
 
   final Set<String> _seenAlertIds = {};
   bool _alertsInitialized = false;
@@ -67,11 +72,19 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
     Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
-  void _showDetail(BuildContext context, Reading reading, String siteName) {
+  void _showDetail(
+    BuildContext context,
+    Reading reading,
+    String siteName,
+    Site? site,
+  ) {
     showDialog<void>(
       context: context,
-      builder: (context) =>
-          _ReadingDetailDialog(reading: reading, siteName: siteName),
+      builder: (context) => _ReadingDetailDialog(
+        reading: reading,
+        siteName: siteName,
+        site: site,
+      ),
     );
   }
 
@@ -123,68 +136,61 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Analyst Dashboard'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => _logout(context),
-          ),
-        ],
-      ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('sites').snapshots(),
-        builder: (context, sitesSnapshot) {
-          final siteDocs = sitesSnapshot.data?.docs ?? [];
-          final sites = siteDocs
-              .map((doc) => Site.fromMap({...doc.data(), 'siteId': doc.id}))
-              .toList();
-          final siteNameById = {for (final s in sites) s.siteId: s.name};
-          final siteById = {for (final s in sites) s.siteId: s};
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('sites').snapshots(),
+      builder: (context, sitesSnapshot) {
+        final siteDocs = sitesSnapshot.data?.docs ?? [];
+        final sites = siteDocs
+            .map((doc) => Site.fromMap({...doc.data(), 'siteId': doc.id}))
+            .toList();
+        final siteNameById = {for (final s in sites) s.siteId: s.name};
+        final siteById = {for (final s in sites) s.siteId: s};
 
-          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            // Equality filter only (no orderBy on a second field), same
-            // convention used elsewhere in this app to avoid requiring a
-            // composite Firestore index — sorted client-side below.
-            stream: FirebaseFirestore.instance
-                .collection('readings')
-                .where('isAlert', isEqualTo: true)
-                .snapshots(),
-            builder: (context, alertSnapshot) {
-              final alertDocs = alertSnapshot.data?.docs ?? [];
-              final alertReadings =
-                  alertDocs
-                      .map(
-                        (doc) => Reading.fromMap({
-                          ...doc.data(),
-                          'readingId': doc.id,
-                        }),
-                      )
-                      .toList()
-                    ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          // Equality filter only (no orderBy on a second field), same
+          // convention used elsewhere in this app to avoid requiring a
+          // composite Firestore index — sorted client-side below.
+          stream: FirebaseFirestore.instance
+              .collection('readings')
+              .where('isAlert', isEqualTo: true)
+              .snapshots(),
+          builder: (context, alertSnapshot) {
+            final alertDocs = alertSnapshot.data?.docs ?? [];
+            final alertReadings =
+                alertDocs
+                    .map(
+                      (doc) => Reading.fromMap({
+                        ...doc.data(),
+                        'readingId': doc.id,
+                      }),
+                    )
+                    .toList()
+                  ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
-              _handleAlertReadings(alertReadings, siteById);
+            _handleAlertReadings(alertReadings, siteById);
 
-              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection('readings')
-                    .orderBy('timestamp', descending: true)
-                    .limit(100)
-                    .snapshots(),
-                builder: (context, readingsSnapshot) {
-                  if (readingsSnapshot.hasError) {
-                    return Center(
-                      child: Text(
-                        'Failed to load readings: ${readingsSnapshot.error}',
-                      ),
-                    );
-                  }
-                  if (readingsSnapshot.connectionState ==
-                      ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('readings')
+                  .orderBy('timestamp', descending: true)
+                  .limit(100)
+                  .snapshots(),
+              builder: (context, readingsSnapshot) {
+                // Scaffold now lives here, one level deeper than before, so
+                // the app bar's notification bell can reflect alertReadings
+                // (the same already-computed list the alert banner already
+                // used) — same queries throughout, just relocated.
+                final Widget body;
+                if (readingsSnapshot.hasError) {
+                  body = Center(
+                    child: Text(
+                      'Failed to load readings: ${readingsSnapshot.error}',
+                    ),
+                  );
+                } else if (readingsSnapshot.connectionState ==
+                    ConnectionState.waiting) {
+                  body = const Center(child: CircularProgressIndicator());
+                } else {
                   final docs = readingsSnapshot.data?.docs ?? [];
                   final readings = docs
                       .map(
@@ -212,66 +218,213 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                   // reading list below is no longer its own Expanded/scrolling
                   // region — it's shrink-wrapped into this single scroll view
                   // so nothing gets clipped regardless of content height.
-                  return SingleChildScrollView(
+                  body = SingleChildScrollView(
                     child: Column(
                       children: [
+                        // Alerts are safety-critical, so they stay visible
+                        // regardless of which tab is active below.
                         _AlertBanner(
                           readings: alertReadings,
                           siteById: siteById,
                         ),
-                        _StatsRow(readings: readings),
-                        _FilterRow(
-                          statusFilter: _statusFilter,
-                          siteFilterId: _siteFilterId,
-                          sites: sites,
-                          onStatusChanged: (value) =>
-                              setState(() => _statusFilter = value),
-                          onSiteChanged: (value) =>
-                              setState(() => _siteFilterId = value),
-                        ),
-                        const SizedBox(height: 8),
-                        _TrendChartsSection(
-                          sites: sites,
-                          allReadings: readings,
-                        ),
-                        const Divider(height: 1),
-                        if (filteredReadings.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 24),
-                            child: Center(
-                              child: Text(
-                                'No readings match the current filter',
-                              ),
-                            ),
-                          )
-                        else
-                          ListView.builder(
-                            padding: const EdgeInsets.all(12),
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: filteredReadings.length,
-                            itemBuilder: (context, index) {
-                              final reading = filteredReadings[index];
-                              final siteName =
-                                  siteNameById[reading.siteId] ??
-                                  reading.siteId;
-                              return _ReadingCard(
-                                reading: reading,
-                                siteName: siteName,
-                                onTap: () =>
-                                    _showDetail(context, reading, siteName),
-                              );
-                            },
+                        if (_activeTab == _DashboardTab.overview) ...[
+                          _StatsRow(
+                            readings: readings,
+                            alertCount: alertReadings.length,
                           ),
+                          const SizedBox(height: 8),
+                          _TrendChartsSection(
+                            sites: sites,
+                            allReadings: readings,
+                          ),
+                        ] else ...[
+                          _FilterRow(
+                            statusFilter: _statusFilter,
+                            siteFilterId: _siteFilterId,
+                            sites: sites,
+                            onStatusChanged: (value) =>
+                                setState(() => _statusFilter = value),
+                            onSiteChanged: (value) =>
+                                setState(() => _siteFilterId = value),
+                          ),
+                          const Divider(height: 1),
+                          if (filteredReadings.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 24),
+                              child: Center(
+                                child: Text(
+                                  'No readings match the current filter',
+                                ),
+                              ),
+                            )
+                          else
+                            ListView.builder(
+                              padding: const EdgeInsets.all(12),
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: filteredReadings.length,
+                              itemBuilder: (context, index) {
+                                final reading = filteredReadings[index];
+                                final siteName =
+                                    siteNameById[reading.siteId] ??
+                                    reading.siteId;
+                                return _ReadingCard(
+                                  reading: reading,
+                                  siteName: siteName,
+                                  site: siteById[reading.siteId],
+                                  onTap: () => _showDetail(
+                                    context,
+                                    reading,
+                                    siteName,
+                                    siteById[reading.siteId],
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
                       ],
                     ),
                   );
-                },
-              );
-            },
-          );
-        },
+                }
+
+                return Scaffold(
+                  appBar: AppBar(
+                    leading: IconButton(
+                      icon: const CircleAvatar(
+                        backgroundColor: Colors.white24,
+                        child: Icon(Icons.person, color: Colors.white),
+                      ),
+                      tooltip: 'Log out',
+                      onPressed: () => _logout(context),
+                    ),
+                    titleSpacing: 0,
+                    title: const Text(
+                      'VARUNA X',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    actions: [
+                      Padding(
+                        padding: const EdgeInsets.only(right: 16),
+                        child: _NotificationBell(
+                          hasAlerts: alertReadings.isNotEmpty,
+                        ),
+                      ),
+                    ],
+                  ),
+                  body: body,
+                  // Replaces the old top SegmentedButton — same _activeTab
+                  // state, same setState call, just triggered from a bottom
+                  // nav bar per the design instead of a top toggle.
+                  bottomNavigationBar: BottomNavigationBar(
+                    currentIndex: _activeTab == _DashboardTab.overview
+                        ? 0
+                        : 1,
+                    onTap: (index) => setState(() {
+                      _activeTab = index == 0
+                          ? _DashboardTab.overview
+                          : _DashboardTab.detailed;
+                    }),
+                    items: const [
+                      BottomNavigationBarItem(
+                        icon: Icon(Icons.home),
+                        label: 'Home',
+                      ),
+                      BottomNavigationBarItem(
+                        icon: Icon(Icons.history),
+                        label: 'History',
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// Purely visual 24h/7d toggle — has no wiring to the chart below it, which
+/// always shows its existing fixed last-30-days window. Local widget state
+/// only, so tapping a pill just changes which one looks selected.
+class _RangeToggle extends StatefulWidget {
+  const _RangeToggle();
+
+  @override
+  State<_RangeToggle> createState() => _RangeToggleState();
+}
+
+class _RangeToggleState extends State<_RangeToggle> {
+  int _selected = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: AppColors.secondaryContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
       ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _rangePill('24h', 0),
+          _rangePill('7d', 1),
+        ],
+      ),
+    );
+  }
+
+  Widget _rangePill(String label, int index) {
+    final selected = _selected == index;
+    return InkWell(
+      onTap: () => setState(() => _selected = index),
+      borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NotificationBell extends StatelessWidget {
+  const _NotificationBell({required this.hasAlerts});
+
+  final bool hasAlerts;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        const Icon(Icons.notifications_none),
+        if (hasAlerts)
+          Positioned(
+            right: -1,
+            top: -1,
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -343,63 +496,61 @@ class _AlertBannerRow extends StatelessWidget {
 }
 
 class _StatsRow extends StatelessWidget {
-  const _StatsRow({required this.readings});
+  const _StatsRow({required this.readings, required this.alertCount});
 
   final List<Reading> readings;
+  final int alertCount;
 
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final todayCount = readings
+    // "Approved Today" combines the two filter predicates already used
+    // individually elsewhere on this dashboard (today's date, approved
+    // status) — no new query, just their intersection over the same
+    // already-fetched readings list.
+    final approvedTodayCount = readings
         .where(
           (r) =>
+              r.status.toLowerCase() == 'approved' &&
               r.timestamp.year == now.year &&
               r.timestamp.month == now.month &&
               r.timestamp.day == now.day,
         )
         .length;
-    final approvedCount = readings
-        .where((r) => r.status.toLowerCase() == 'approved')
-        .length;
     final pendingCount = readings
         .where((r) => r.status.toLowerCase() == 'pending')
         .length;
-    final siteCount = readings.map((r) => r.siteId).toSet().length;
 
     return Padding(
       padding: const EdgeInsets.all(12),
-      child: Row(
+      child: GridView.count(
+        crossAxisCount: 2,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+        childAspectRatio: 1.6,
         children: [
-          Expanded(
-            child: _StatCard(
-              label: 'Today',
-              value: todayCount,
-              color: Colors.blue,
-            ),
+          _StatCard(
+            label: 'Total Readings',
+            value: readings.length,
+            color: Colors.blue,
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _StatCard(
-              label: 'Approved',
-              value: approvedCount,
-              color: Colors.green,
-            ),
+          _StatCard(
+            label: 'Danger Level',
+            value: alertCount,
+            color: AppColors.error,
+            icon: Icons.warning_amber_rounded,
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _StatCard(
-              label: 'Pending',
-              value: pendingCount,
-              color: Colors.orange,
-            ),
+          _StatCard(
+            label: 'Pending Review',
+            value: pendingCount,
+            color: Colors.orange,
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _StatCard(
-              label: 'Sites',
-              value: siteCount,
-              color: Colors.purple,
-            ),
+          _StatCard(
+            label: 'Approved Today',
+            value: approvedTodayCount,
+            color: Colors.green,
           ),
         ],
       ),
@@ -412,27 +563,39 @@ class _StatCard extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
+    this.icon,
   });
 
   final String label;
   final int value;
   final Color color;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       color: color.withValues(alpha: 0.1),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              '$value',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, color: color, size: 18),
+                  const SizedBox(width: 4),
+                ],
+                Text(
+                  '$value',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(
@@ -465,53 +628,54 @@ class _FilterRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const Text(
+            'Status',
+            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                const Text(
-                  'Status',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-                DropdownButton<String>(
-                  value: statusFilter,
-                  isExpanded: true,
-                  items: _statusOptions
-                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                      .toList(),
-                  onChanged: (value) {
-                    if (value != null) onStatusChanged(value);
-                  },
-                ),
+                for (final option in _statusOptions) ...[
+                  _FilterPill(
+                    label: option,
+                    selected: statusFilter == option,
+                    onTap: () => onStatusChanged(option),
+                  ),
+                  const SizedBox(width: 8),
+                ],
               ],
             ),
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(height: 12),
+          const Text(
+            'Site',
+            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                const Text(
-                  'Site',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                _FilterPill(
+                  label: 'All sites',
+                  selected: siteFilterId == null,
+                  onTap: () => onSiteChanged(null),
                 ),
-                DropdownButton<String?>(
-                  value: siteFilterId,
-                  isExpanded: true,
-                  items: [
-                    const DropdownMenuItem<String?>(child: Text('All sites')),
-                    ...sites.map(
-                      (s) => DropdownMenuItem<String?>(
-                        value: s.siteId,
-                        child: Text(s.name),
-                      ),
-                    ),
-                  ],
-                  onChanged: onSiteChanged,
-                ),
+                const SizedBox(width: 8),
+                for (final site in sites) ...[
+                  _FilterPill(
+                    label: site.name,
+                    selected: siteFilterId == site.siteId,
+                    onTap: () => onSiteChanged(site.siteId),
+                  ),
+                  const SizedBox(width: 8),
+                ],
               ],
             ),
           ),
@@ -521,52 +685,119 @@ class _FilterRow extends StatelessWidget {
   }
 }
 
+class _FilterPill extends StatelessWidget {
+  const _FilterPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary : AppColors.secondaryContainer,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ReadingCard extends StatelessWidget {
   const _ReadingCard({
     required this.reading,
     required this.siteName,
+    required this.site,
     required this.onTap,
   });
 
   final Reading reading;
   final String siteName;
+  final Site? site;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final color = _statusColor(reading.status);
     final level = reading.manualLevel ?? reading.aiDetectedLevel;
+    final siteIdText = site?.siteCode ?? siteName;
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
         onTap: onTap,
-        title: Text(
-          siteName,
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 4),
-            Text(_formatTimestamp(reading.timestamp)),
-            if (level != null) Text('Level: $level'),
-          ],
-        ),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: color),
-          ),
-          child: Text(
-            reading.status,
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w600,
-              fontSize: 12,
-            ),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: Text(
+                  siteIdText,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Expanded(
+                flex: 3,
+                child: Text(
+                  _formatTimestamp(reading.timestamp),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text(
+                  level != null ? '${level.toStringAsFixed(1)}m' : '—',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(
+                        AppSpacing.radiusPill,
+                      ),
+                      border: Border.all(color: color),
+                    ),
+                    child: Text(
+                      reading.status,
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -575,14 +806,26 @@ class _ReadingCard extends StatelessWidget {
 }
 
 class _ReadingDetailDialog extends StatelessWidget {
-  const _ReadingDetailDialog({required this.reading, required this.siteName});
+  const _ReadingDetailDialog({
+    required this.reading,
+    required this.siteName,
+    required this.site,
+  });
 
   final Reading reading;
   final String siteName;
+  final Site? site;
 
   @override
   Widget build(BuildContext context) {
-    final color = _statusColor(reading.status);
+    // isAlert is already on the Reading itself (no new data) — a reading
+    // that triggered a danger-level alert is called out as "Critical" here
+    // rather than showing its ordinary pending/approved/rejected status.
+    final isCritical = reading.isAlert;
+    final statusLabel = isCritical ? 'Critical' : reading.status;
+    final color = isCritical ? AppColors.error : _statusColor(reading.status);
+    final level = reading.manualLevel ?? reading.aiDetectedLevel;
+    final siteIdText = site?.siteCode ?? siteName;
 
     return Dialog(
       child: ConstrainedBox(
@@ -594,30 +837,92 @@ class _ReadingDetailDialog extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(siteName, style: Theme.of(context).textTheme.titleLarge),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        siteIdText,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(
+                          AppSpacing.radiusPill,
+                        ),
+                        border: Border.all(color: color),
+                      ),
+                      child: Text(
+                        statusLabel,
+                        style: TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
                 if (reading.photoUrl.isNotEmpty)
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      reading.photoUrl,
-                      height: 200,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const SizedBox(
-                            height: 160,
-                            child: Center(
-                              child: Icon(Icons.broken_image, size: 48),
+                    borderRadius: BorderRadius.circular(
+                      AppSpacing.radiusStandard,
+                    ),
+                    child: Stack(
+                      children: [
+                        Image.network(
+                          reading.photoUrl,
+                          height: 200,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const SizedBox(
+                                height: 160,
+                                child: Center(
+                                  child: Icon(Icons.broken_image, size: 48),
+                                ),
+                              ),
+                          loadingBuilder: (context, child, progress) {
+                            if (progress == null) return child;
+                            return const SizedBox(
+                              height: 160,
+                              child: Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
+                          },
+                        ),
+                        Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.6),
+                              borderRadius: BorderRadius.circular(
+                                AppSpacing.radiusPill,
+                              ),
+                            ),
+                            child: Text(
+                              _formatTimestamp(reading.timestamp),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
-                      loadingBuilder: (context, child, progress) {
-                        if (progress == null) return child;
-                        return const SizedBox(
-                          height: 160,
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      },
+                        ),
+                      ],
                     ),
                   )
                 else
@@ -626,20 +931,26 @@ class _ReadingDetailDialog extends StatelessWidget {
                     child: Center(child: Text('Photo not yet uploaded')),
                   ),
                 const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: color),
-                  ),
-                  child: Text(
-                    reading.status,
-                    style: TextStyle(color: color, fontWeight: FontWeight.w600),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Recorded Level',
+                        value: level != null
+                            ? '${level.toStringAsFixed(1)}m'
+                            : '—',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Threshold',
+                        value: site != null
+                            ? '${site!.dangerLevel.toStringAsFixed(1)}m'
+                            : '—',
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 _DetailRow(
@@ -663,12 +974,30 @@ class _ReadingDetailDialog extends StatelessWidget {
                     label: 'AI detected level',
                     value: '${reading.aiDetectedLevel}',
                   ),
+                if (reading.phLevel != null)
+                  _DetailRow(
+                    label: 'pH',
+                    value: reading.phLevel!.toStringAsFixed(1),
+                  ),
                 if (reading.supervisorNote != null &&
                     reading.supervisorNote!.isNotEmpty)
                   _DetailRow(
                     label: 'Supervisor note',
                     value: reading.supervisorNote!,
                   ),
+                if (site != null) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Summary',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(generateReadingSummary(reading, site!, null)),
+                ],
                 const SizedBox(height: 16),
                 Align(
                   alignment: Alignment.centerRight,
@@ -681,6 +1010,45 @@ class _ReadingDetailDialog extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      decoration: BoxDecoration(
+        color: AppColors.secondaryContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.onSurface,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -753,26 +1121,56 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Site',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-          DropdownButton<String>(
-            value: selectedSiteId,
-            isExpanded: true,
-            items: widget.sites
-                .map(
-                  (s) =>
-                      DropdownMenuItem(value: s.siteId, child: Text(s.name)),
-                )
-                .toList(),
-            onChanged: (value) => setState(() => _selectedSiteId = value),
-          ),
-          const SizedBox(height: 8),
-          _SiteTrendLineChart(
-            key: ValueKey('trend_$selectedSiteId'),
-            siteId: selectedSiteId,
-            site: selectedSite,
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Water Level Trend',
+                          style: Theme.of(context).textTheme.bodyLarge
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      // Purely decorative — this dashboard has no existing
+                      // time-range control to restyle, and the underlying
+                      // chart always shows the last 30 days regardless of
+                      // which pill looks selected. No new filtering logic.
+                      const _RangeToggle(),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Site',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  DropdownButton<String>(
+                    value: selectedSiteId,
+                    isExpanded: true,
+                    items: widget.sites
+                        .map(
+                          (s) => DropdownMenuItem(
+                            value: s.siteId,
+                            child: Text(s.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) =>
+                        setState(() => _selectedSiteId = value),
+                  ),
+                  const SizedBox(height: 8),
+                  _SiteTrendLineChart(
+                    key: ValueKey('trend_$selectedSiteId'),
+                    siteId: selectedSiteId,
+                    site: selectedSite,
+                  ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 16),
           _WeatherSection(
@@ -781,11 +1179,27 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
           ),
           const SizedBox(height: 16),
           const Text(
+            'Water Level — all sites (latest reading)',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          const SizedBox(height: 8),
+          _AllSitesLevelChart(sites: widget.sites, allReadings: widget.allReadings),
+          const SizedBox(height: 16),
+          const Text(
             'Reading Status — all sites',
             style: TextStyle(fontSize: 12, color: Colors.grey),
           ),
           const SizedBox(height: 8),
           _StatusBarChart(readings: widget.allReadings),
+          const SizedBox(height: 12),
+          _StatusPieChart(readings: widget.allReadings),
+          const SizedBox(height: 16),
+          const Text(
+            'Submission Activity — last 30 days',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          const SizedBox(height: 8),
+          _SubmissionHeatmap(readings: widget.allReadings),
           const SizedBox(height: 8),
         ],
       ),
@@ -875,6 +1289,24 @@ class _SiteTrendLineChart extends StatelessWidget {
               maxY: highest + 0.5,
               gridData: const FlGridData(show: true),
               borderData: FlBorderData(show: true),
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  getTooltipItems: (touchedSpots) => touchedSpots.map((spot) {
+                    final date = DateTime.fromMillisecondsSinceEpoch(
+                      spot.x.toInt(),
+                    );
+                    return LineTooltipItem(
+                      '${_formatShortDate(date)}\n'
+                      '${spot.y.toStringAsFixed(2)}m',
+                      const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
               titlesData: FlTitlesData(
                 topTitles: const AxisTitles(
                   sideTitles: SideTitles(showTitles: false),
@@ -1148,6 +1580,311 @@ class _StatusBarChart extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Pie chart showing the proportion of readings by status across all
+/// sites — the same approved/pending/rejected counts as [_StatusBarChart],
+/// just a different view of them.
+class _StatusPieChart extends StatelessWidget {
+  const _StatusPieChart({required this.readings});
+
+  final List<Reading> readings;
+
+  @override
+  Widget build(BuildContext context) {
+    final approved = readings
+        .where((r) => r.status.toLowerCase() == 'approved')
+        .length;
+    final pending = readings
+        .where((r) => r.status.toLowerCase() == 'pending')
+        .length;
+    final rejected = readings
+        .where((r) => r.status.toLowerCase() == 'rejected')
+        .length;
+    final total = approved + pending + rejected;
+
+    if (total == 0) {
+      return const SizedBox(
+        height: 120,
+        child: Center(child: Text('No readings yet')),
+      );
+    }
+
+    const titleStyle = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.bold,
+      color: Colors.white,
+    );
+
+    return Column(
+      children: [
+        SizedBox(
+          height: 160,
+          child: PieChart(
+            PieChartData(
+              sectionsSpace: 2,
+              centerSpaceRadius: 32,
+              sections: [
+                if (approved > 0)
+                  PieChartSectionData(
+                    value: approved.toDouble(),
+                    color: Colors.green,
+                    title: '${(approved / total * 100).round()}%',
+                    radius: 56,
+                    titleStyle: titleStyle,
+                  ),
+                if (pending > 0)
+                  PieChartSectionData(
+                    value: pending.toDouble(),
+                    color: Colors.orange,
+                    title: '${(pending / total * 100).round()}%',
+                    radius: 56,
+                    titleStyle: titleStyle,
+                  ),
+                if (rejected > 0)
+                  PieChartSectionData(
+                    value: rejected.toDouble(),
+                    color: Colors.red,
+                    title: '${(rejected / total * 100).round()}%',
+                    radius: 56,
+                    titleStyle: titleStyle,
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 12,
+          runSpacing: 4,
+          alignment: WrapAlignment.center,
+          children: [
+            _PieLegendEntry(color: Colors.green, label: 'Approved', count: approved),
+            _PieLegendEntry(color: Colors.orange, label: 'Pending', count: pending),
+            _PieLegendEntry(color: Colors.red, label: 'Rejected', count: rejected),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _PieLegendEntry extends StatelessWidget {
+  const _PieLegendEntry({
+    required this.color,
+    required this.label,
+    required this.count,
+  });
+
+  final Color color;
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text('$label ($count)', style: const TextStyle(fontSize: 11)),
+      ],
+    );
+  }
+}
+
+class _SiteLevelEntry {
+  const _SiteLevelEntry(this.site, this.level);
+
+  final Site site;
+  final double level;
+}
+
+/// Horizontal comparison of the latest recorded water level at every site,
+/// so an analyst can see at a glance which sites are currently highest.
+/// Colored per-site relative to that site's own dangerLevel: green well
+/// below it, amber approaching it, red at or above it. Built with plain
+/// widgets rather than fl_chart's BarChart, which in the version pinned by
+/// this project (1.2.0) has no horizontal-orientation option.
+class _AllSitesLevelChart extends StatelessWidget {
+  const _AllSitesLevelChart({required this.sites, required this.allReadings});
+
+  final List<Site> sites;
+  final List<Reading> allReadings;
+
+  @override
+  Widget build(BuildContext context) {
+    // allReadings is already newest-first (the same top-100 stream that
+    // feeds the rest of this dashboard), so the first match per site here
+    // is that site's latest reading with a usable level.
+    final latestBySite = <String, Reading>{};
+    for (final r in allReadings) {
+      final level = r.manualLevel ?? r.aiDetectedLevel;
+      if (level == null) continue;
+      latestBySite.putIfAbsent(r.siteId, () => r);
+    }
+
+    final rows = <_SiteLevelEntry>[];
+    for (final site in sites) {
+      final reading = latestBySite[site.siteId];
+      final level = reading?.manualLevel ?? reading?.aiDetectedLevel;
+      if (level == null) continue;
+      rows.add(_SiteLevelEntry(site, level));
+    }
+    rows.sort((a, b) => b.level.compareTo(a.level));
+
+    if (rows.isEmpty) {
+      return const SizedBox(
+        height: 60,
+        child: Center(child: Text('No recent level readings yet')),
+      );
+    }
+
+    final maxScale = rows.fold<double>(
+      0,
+      (acc, r) => [acc, r.level, r.site.dangerLevel].reduce((a, b) => a > b ? a : b),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final row in rows)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 90,
+                  child: Text(
+                    row.site.name,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                Expanded(
+                  child: Builder(
+                    builder: (context) {
+                      final ratio = row.site.dangerLevel > 0
+                          ? row.level / row.site.dangerLevel
+                          : 0.0;
+                      final color = ratio >= 1.0
+                          ? Colors.red
+                          : ratio >= 0.7
+                              ? Colors.amber.shade700
+                              : Colors.green;
+                      final widthFactor = maxScale > 0
+                          ? (row.level / maxScale).clamp(0.0, 1.0)
+                          : 0.0;
+                      return Stack(
+                        children: [
+                          Container(
+                            height: 18,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                          FractionallySizedBox(
+                            widthFactor: widthFactor,
+                            child: Container(
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: color,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 48,
+                  child: Text(
+                    '${row.level.toStringAsFixed(1)}m',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Calendar-heatmap-style view of reading submission activity over the last
+/// 30 days — one square per day, darker for more readings that day. Fed
+/// from the same top-100 readings stream as the rest of this dashboard, so
+/// very high-volume days beyond that cap may under-count.
+class _SubmissionHeatmap extends StatelessWidget {
+  const _SubmissionHeatmap({required this.readings});
+
+  final List<Reading> readings;
+
+  @override
+  Widget build(BuildContext context) {
+    final today = DateTime.now();
+    final startDay = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).subtract(const Duration(days: 29));
+
+    final countByDay = <DateTime, int>{
+      for (var i = 0; i < 30; i++) startDay.add(Duration(days: i)): 0,
+    };
+    for (final r in readings) {
+      final day = DateTime(
+        r.timestamp.year,
+        r.timestamp.month,
+        r.timestamp.day,
+      );
+      if (countByDay.containsKey(day)) {
+        countByDay[day] = countByDay[day]! + 1;
+      }
+    }
+
+    final maxCount = countByDay.values.fold<int>(
+      0,
+      (a, b) => a > b ? a : b,
+    );
+
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: countByDay.entries.map((entry) {
+        final count = entry.value;
+        final intensity = maxCount == 0 ? 0.0 : count / maxCount;
+        final color = count == 0
+            ? Colors.grey.shade200
+            : Colors.blue.withValues(alpha: 0.25 + 0.75 * intensity);
+
+        return Tooltip(
+          message:
+              '${_formatShortDate(entry.key)}: $count '
+              'reading${count == 1 ? '' : 's'}',
+          child: Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 }

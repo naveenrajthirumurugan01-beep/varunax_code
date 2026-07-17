@@ -11,6 +11,7 @@ class Reading {
   final String status;
   final String? supervisorNote;
   final bool isAlert;
+  final double? phLevel;
 
   Reading({
     required this.readingId,
@@ -25,6 +26,7 @@ class Reading {
     required this.status,
     this.supervisorNote,
     this.isAlert = false,
+    this.phLevel,
   });
 
   factory Reading.fromMap(Map<String, dynamic> map) {
@@ -43,6 +45,7 @@ class Reading {
       status: map['status'] as String,
       supervisorNote: map['supervisorNote'] as String?,
       isAlert: map['isAlert'] as bool? ?? false,
+      phLevel: (map['phLevel'] as num?)?.toDouble(),
     );
   }
 
@@ -60,6 +63,7 @@ class Reading {
       'status': status,
       'supervisorNote': supervisorNote,
       'isAlert': isAlert,
+      'phLevel': phLevel,
     };
   }
 }

@@ -1,8 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/theme.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
+import '../../services/user_lookup_service.dart';
+import '../../utils/report_generator.dart';
 
 enum _StatusFilter { all, approved, rejected, pending }
 
@@ -55,77 +58,146 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Reading History')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-            child: DropdownButtonFormField<_StatusFilter>(
-              initialValue: _filter,
-              decoration: const InputDecoration(
-                labelText: 'Filter',
-                border: OutlineInputBorder(),
-              ),
-              items: _StatusFilter.values
-                  .map(
-                    (filter) => DropdownMenuItem(
-                      value: filter,
-                      child: Text(filter.label),
+      appBar: AppBar(title: const Text('All Readings')),
+      // Sites are fetched once here (rather than per-card) so _HistoryCard
+      // can build a reading summary without an extra Firestore read per
+      // card — mirrors the siteById pattern already used in review_screen.
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance.collection('sites').snapshots(),
+        builder: (context, sitesSnapshot) {
+          final siteDocs = sitesSnapshot.data?.docs ?? [];
+          final siteById = {
+            for (final doc in siteDocs)
+              doc.id: Site.fromMap({...doc.data(), 'siteId': doc.id}),
+          };
+
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Activity Log',
+                        style: Theme.of(context).textTheme.headlineMedium,
+                      ),
                     ),
-                  )
-                  .toList(),
-              onChanged: (filter) {
-                if (filter == null) return;
-                setState(() {
-                  _filter = filter;
-                });
-              },
-            ),
+                    // Visual only for now — no additional filter logic
+                    // behind this yet.
+                    TextButton(
+                      onPressed: () {},
+                      child: const Text('More Filters'),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final filter in _StatusFilter.values) ...[
+                        _FilterPill(
+                          label: filter.label,
+                          selected: _filter == filter,
+                          onTap: () => setState(() => _filter = filter),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: query.snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text(
+                          'Failed to load readings: ${snapshot.error}',
+                        ),
+                      );
+                    }
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final docs = snapshot.data?.docs ?? [];
+                    if (docs.isEmpty) {
+                      return const Center(child: Text('No readings found'));
+                    }
+
+                    final readings = docs
+                        .map(
+                          (doc) => Reading.fromMap({
+                            ...doc.data(),
+                            'readingId': doc.id,
+                          }),
+                        )
+                        .toList();
+
+                    return ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: readings.length,
+                      itemBuilder: (context, index) => _HistoryCard(
+                        reading: readings[index],
+                        site: siteById[readings[index].siteId],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _FilterPill extends StatelessWidget {
+  const _FilterPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary : AppColors.secondaryContainer,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
           ),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: query.snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Text('Failed to load readings: ${snapshot.error}'),
-                  );
-                }
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final docs = snapshot.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const Center(child: Text('No readings found'));
-                }
-
-                final readings = docs
-                    .map(
-                      (doc) =>
-                          Reading.fromMap({...doc.data(), 'readingId': doc.id}),
-                    )
-                    .toList();
-
-                return ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: readings.length,
-                  itemBuilder: (context, index) =>
-                      _HistoryCard(reading: readings[index]),
-                );
-              },
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
 class _HistoryCard extends StatelessWidget {
-  const _HistoryCard({required this.reading});
+  const _HistoryCard({required this.reading, required this.site});
 
   final Reading reading;
+  final Site? site;
 
   String _formatTimestamp(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
@@ -133,32 +205,93 @@ class _HistoryCard extends StatelessWidget {
         '${two(dt.hour)}:${two(dt.minute)}';
   }
 
+  // Same mismatch formula _LevelComparison already applies below (Dart
+  // privacy is per-library/file, not per-class, so its threshold constant
+  // is reachable here without duplicating the number).
+  bool get _isHighVariance {
+    final manual = reading.manualLevel;
+    final ai = reading.aiDetectedLevel;
+    if (manual == null || ai == null) return false;
+    return (manual - ai).abs() > _LevelComparison._mismatchThreshold;
+  }
+
+  Color? get _accentColor {
+    if (reading.status == 'rejected') return Colors.red;
+    if (_isHighVariance) return Colors.orange;
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final accent = _accentColor;
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
+      margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        decoration: accent == null
+            ? null
+            : BoxDecoration(border: Border(left: BorderSide(color: accent, width: 4))),
+        padding: const EdgeInsets.all(10),
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(child: _SiteNameLabel(siteId: reading.siteId)),
-                _StatusBadge(status: reading.status),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text('Submitted: ${_formatTimestamp(reading.timestamp)}'),
-            _LevelComparison(reading: reading),
-            if (reading.supervisorNote != null &&
-                reading.supervisorNote!.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Note: ${reading.supervisorNote}',
-                style: const TextStyle(fontStyle: FontStyle.italic),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+              child: SizedBox(
+                width: 64,
+                height: 64,
+                child: Image.network(
+                  reading.photoUrl,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) =>
+                      const Icon(Icons.broken_image),
+                ),
               ),
-            ],
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: _SiteNameLabel(siteId: reading.siteId)),
+                      _StatusBadge(status: reading.status),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  _SubmitterLabel(
+                    uid: reading.submittedBy,
+                    timeText: _formatTimestamp(reading.timestamp),
+                  ),
+                  _LevelComparison(reading: reading),
+                  if (reading.supervisorNote != null &&
+                      reading.supervisorNote!.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Note: ${reading.supervisorNote}',
+                      style: const TextStyle(fontStyle: FontStyle.italic),
+                    ),
+                  ],
+                  if (site != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Summary',
+                      style: textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      generateReadingSummary(reading, site!, null),
+                      style: textTheme.bodyMedium,
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -223,6 +356,32 @@ class _SiteNameLabel extends StatelessWidget {
   }
 }
 
+class _SubmitterLabel extends StatelessWidget {
+  const _SubmitterLabel({required this.uid, this.timeText});
+
+  final String uid;
+  final String? timeText;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: UserLookupService.getDisplayName(uid),
+      builder: (context, snapshot) {
+        final displayName = snapshot.data ?? uid;
+        final text = timeText == null
+            ? 'Submitted by: $displayName'
+            : 'Officer: $displayName • $timeText';
+        return Text(
+          text,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: AppColors.onSurfaceVariant,
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _LevelComparison extends StatelessWidget {
   const _LevelComparison({required this.reading});
 
@@ -242,22 +401,33 @@ class _LevelComparison extends StatelessWidget {
     if (manual != null && ai != null) {
       final mismatch = (manual - ai).abs() > _mismatchThreshold;
       return Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
+        padding: const EdgeInsets.only(top: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'AI: ${ai.toStringAsFixed(1)}m | '
-              'Officer: ${manual.toStringAsFixed(1)}m',
-              style: TextStyle(
-                fontWeight: mismatch ? FontWeight.bold : FontWeight.normal,
-                color: mismatch ? Colors.red.shade700 : null,
-              ),
-            ),
             if (mismatch) ...[
-              const SizedBox(width: 6),
-              const Text('⚠️ Mismatch'),
+              const _MismatchBanner(),
+              const SizedBox(height: 8),
             ],
+            Row(
+              children: [
+                Expanded(
+                  child: _ComparisonCell(
+                    label: 'MANUAL INPUT',
+                    value: '${manual.toStringAsFixed(1)}m',
+                    highlight: mismatch,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ComparisonCell(
+                    label: 'AI DETECTED',
+                    value: '${ai.toStringAsFixed(1)}m',
+                    highlight: mismatch,
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       );
@@ -265,14 +435,104 @@ class _LevelComparison extends StatelessWidget {
 
     if (manual != null) {
       return Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Text('Manual level: ${manual.toStringAsFixed(1)}m'),
+        padding: const EdgeInsets.only(top: 8),
+        child: _ComparisonCell(
+          label: 'MANUAL INPUT',
+          value: '${manual.toStringAsFixed(1)}m',
+          highlight: false,
+        ),
       );
     }
 
     return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Text('AI-detected level: ${ai!.toStringAsFixed(1)}m'),
+      padding: const EdgeInsets.only(top: 8),
+      child: _ComparisonCell(
+        label: 'AI DETECTED',
+        value: '${ai!.toStringAsFixed(1)}m',
+        highlight: false,
+      ),
+    );
+  }
+}
+
+class _MismatchBanner extends StatelessWidget {
+  const _MismatchBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            color: Colors.orange.shade800,
+            size: 18,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'AI and manual readings differ significantly',
+              style: TextStyle(
+                color: Colors.orange.shade800,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComparisonCell extends StatelessWidget {
+  const _ComparisonCell({
+    required this.label,
+    required this.value,
+    required this.highlight,
+  });
+
+  final String label;
+  final String value;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      decoration: BoxDecoration(
+        color: highlight ? Colors.orange.shade50 : AppColors.secondaryContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: highlight ? Colors.orange.shade800 : AppColors.onSurface,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

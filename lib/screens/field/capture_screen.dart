@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../../core/theme.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
 import '../../models/weather_reading_model.dart';
@@ -16,6 +17,7 @@ import '../../services/ai_detection_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cloudinary_service.dart';
 import '../../services/location_service.dart';
+import '../../services/push_sender_service.dart';
 import '../../services/segmentation_service.dart';
 import '../../services/sync_service.dart';
 import '../../services/weather_service.dart';
@@ -42,6 +44,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   final _aiDetectionService = AiDetectionService();
   final _segmentationService = SegmentationService();
   final _levelController = TextEditingController();
+  final _phLevelController = TextEditingController();
 
   _CaptureStage _stage = _CaptureStage.checkingLocation;
   String? _errorMessage;
@@ -70,6 +73,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   double? get _parsedLevel => double.tryParse(_levelController.text.trim());
 
+  // Optional — a missing or unparsable pH reading never blocks submission,
+  // unlike the water level field above.
+  double? get _parsedPhLevel {
+    final text = _phLevelController.text.trim();
+    if (text.isEmpty) return null;
+    return double.tryParse(text);
+  }
+
   bool get _canSubmit =>
       _parsedLevel != null &&
       _capturedPhoto != null &&
@@ -86,6 +97,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   void dispose() {
     _cameraController?.dispose();
     _levelController.dispose();
+    _phLevelController.dispose();
     _aiDetectionService.dispose();
     _segmentationService.dispose();
     super.dispose();
@@ -282,6 +294,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Future<void> _confirmPhoto() async {
     final photo = _capturedPhoto;
     final level = _parsedLevel;
+    final phLevel = _parsedPhLevel;
     if (photo == null ||
         level == null ||
         _userLatitude == null ||
@@ -337,6 +350,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
           status: 'pending',
           supervisorNote: null,
           isAlert: isAlert,
+          phLevel: phLevel,
         );
 
         await SyncService().saveReadingOffline(offlineReading, photo.path);
@@ -385,9 +399,22 @@ class _CaptureScreenState extends State<CaptureScreen> {
         status: 'pending',
         supervisorNote: null,
         isAlert: isAlert,
+        phLevel: phLevel,
       );
 
       await readingRef.set(reading.toMap());
+
+      if (isAlert) {
+        // Fire-and-forget: must never block or fail the reading submission
+        // that triggered it.
+        unawaited(
+          PushSenderService().sendAlertPush(
+            widget.site.name,
+            level,
+            widget.site.dangerLevel,
+          ),
+        );
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -411,7 +438,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.site.name)),
+      appBar: AppBar(
+        // Same pop the default back arrow already performed — just made
+        // explicit as a close icon per the design's top bar.
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: 'Cancel',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: const Text('New Reading'),
+      ),
       body: SafeArea(child: _buildBody()),
     );
   }
@@ -448,32 +484,21 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   Widget _buildSiteInfoCard() {
+    final textTheme = Theme.of(context).textTheme;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Site Information',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.site.name,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            Text(widget.site.name, style: textTheme.headlineLarge),
             const SizedBox(height: 4),
             Text(
-              '${widget.site.siteCode} • ${widget.site.riverName}',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+              widget.site.riverName,
+              style: textTheme.bodyMedium?.copyWith(
+                color: AppColors.onSurfaceVariant,
+              ),
             ),
           ],
         ),
@@ -482,20 +507,15 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   Widget _buildWaterLevelCard() {
+    final textTheme = Theme.of(context).textTheme;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Water Level Reading',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey,
-              ),
-            ),
+            Text('Water Level (m)', style: textTheme.labelMedium),
             const SizedBox(height: 8),
             TextField(
               controller: _levelController,
@@ -503,8 +523,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                 decimal: true,
               ),
               decoration: const InputDecoration(
-                labelText: 'Enter level in meters',
-                border: OutlineInputBorder(),
+                hintText: 'Enter level in meters',
               ),
               onChanged: (_) => setState(() {
                 _userEditedLevel = true;
@@ -514,13 +533,19 @@ class _CaptureScreenState extends State<CaptureScreen> {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.info_outline, size: 14, color: Colors.grey.shade600),
+                  Icon(
+                    Icons.info_outline,
+                    size: 14,
+                    color: AppColors.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       'AI-assisted reading detection isn\'t available on web — '
                       'please enter the level manually.',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      style: textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ],
@@ -528,34 +553,38 @@ class _CaptureScreenState extends State<CaptureScreen> {
             ] else ...[
               if (_isDetectingLevel) ...[
                 const SizedBox(height: 8),
-                const Row(
+                Row(
                   children: [
-                    SizedBox(
+                    const SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                    SizedBox(width: 8),
+                    const SizedBox(width: 8),
                     Text(
                       'Analyzing gauge reading...',
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                      style: textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
               ],
               if (_isDetectingWaterLine) ...[
                 const SizedBox(height: 8),
-                const Row(
+                Row(
                   children: [
-                    SizedBox(
+                    const SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                    SizedBox(width: 8),
+                    const SizedBox(width: 8),
                     Text(
                       'Analyzing water line...',
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                      style: textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -564,19 +593,18 @@ class _CaptureScreenState extends State<CaptureScreen> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.auto_awesome,
                       size: 14,
-                      color: Colors.blue.shade600,
+                      color: AppColors.primary,
                     ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Auto-filled by AI — please verify before submitting',
-                        style: TextStyle(
-                          fontSize: 12,
+                        'AI suggested — please verify before submitting',
+                        style: textTheme.labelSmall?.copyWith(
                           fontStyle: FontStyle.italic,
-                          color: Colors.blue.shade600,
+                          color: AppColors.primary,
                         ),
                       ),
                     ),
@@ -594,16 +622,35 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     'Estimated from image analysis — water line detected at '
                     '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
                     'frame height, not a calibrated gauge reading.',
-                    style: TextStyle(fontSize: 11, color: Colors.blue.shade400),
+                    style: textTheme.labelSmall?.copyWith(
+                      color: AppColors.primary.withValues(alpha: 0.7),
+                    ),
                   ),
                 ],
               ],
             ],
+            const SizedBox(height: 16),
+            Text('pH Level (optional)', style: textTheme.labelMedium),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _phLevelController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(hintText: 'e.g. 7.2'),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Leave blank if pH meter unavailable',
+              style: textTheme.labelSmall?.copyWith(
+                color: AppColors.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 12),
             Text(
               'Danger Level: ${widget.site.dangerLevel} m',
-              style: const TextStyle(
-                color: Colors.orange,
+              style: TextStyle(
+                color: AppColors.error,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -649,12 +696,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            const Icon(Icons.location_off, size: 64, color: Colors.red),
+            const Icon(Icons.location_off, size: 64, color: AppColors.error),
             const SizedBox(height: 16),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16),
+              style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
@@ -672,14 +719,26 @@ class _CaptureScreenState extends State<CaptureScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+        Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+              border: Border.all(color: Colors.green.shade200),
+            ),
             child: Row(
-              children: const [
-                Icon(Icons.location_on, color: Colors.blue),
-                SizedBox(width: 12),
-                Text('Using device location'),
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_circle, color: Colors.green.shade700, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  'Within geofence range',
+                  style: TextStyle(
+                    color: Colors.green.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
           ),
@@ -688,7 +747,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         if (_errorMessage != null) ...[
           Text(
             _errorMessage!,
-            style: const TextStyle(color: Colors.red),
+            style: TextStyle(color: AppColors.error),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 12),
@@ -698,7 +757,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
           icon: const Icon(Icons.camera_alt),
           label: const Text('Open Camera'),
           style: ElevatedButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
+            minimumSize: const Size.fromHeight(AppSpacing.minTouchTarget),
           ),
         ),
       ],
@@ -839,20 +898,18 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     Text('Saving reading...'),
                   ],
                 )
-              : Row(
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _retake,
-                        child: const Text('Retake'),
-                      ),
+                    OutlinedButton(
+                      onPressed: _retake,
+                      child: const Text('Retake'),
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _canSubmit ? _confirmPhoto : null,
-                        child: const Text('Submit Reading'),
-                      ),
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: _canSubmit ? _confirmPhoto : null,
+                      icon: const Icon(Icons.upload),
+                      label: const Text('Submit Reading'),
                     ),
                   ],
                 ),

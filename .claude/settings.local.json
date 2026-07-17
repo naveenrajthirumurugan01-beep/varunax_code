@@ -29,7 +29,22 @@
       "Bash(mv \"C:/Users/naveen/OneDrive/Desktop/VARUNA X/varunax\" \"C:/Users/naveen/OneDrive/Desktop/friend_ml/varunax\")",
       "Bash(python -c \"import onnxruntime; print\\(onnxruntime.__version__\\)\")",
       "Bash(python -m pip install --quiet onnxruntime)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(firebase --version)",
+      "Bash(firebase login:list)",
+      "Bash(firebase projects:list)",
+      "Bash(npm --version)",
+      "Bash(node -e \"const c=require\\('./android/app/google-services.json'\\); console.log\\(c.project_info.project_id\\)\")",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(timeout 25 firebase emulators:start --only functions --project varuna-x-28174)",
+      "Bash(echo \"---exit $?---\")",
+      "Bash(npm view *)",
+      "Bash(firebase deploy *)",
+      "Bash(node *)",
+      "Bash(rm -f /tmp_flutter_run.log)",
+      "Bash(flutter run *)",
+      "Bash(echo \"started PID $!\")"
     ]
   }
 }

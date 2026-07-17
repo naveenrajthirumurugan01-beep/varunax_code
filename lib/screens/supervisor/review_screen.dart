@@ -1,8 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/theme.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
+import '../../services/user_lookup_service.dart';
+import '../../utils/report_generator.dart';
 
 String _timeAgo(DateTime dt) {
   final diff = DateTime.now().difference(dt);
@@ -77,94 +80,149 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Review Readings')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('sites').snapshots(),
-        builder: (context, sitesSnapshot) {
-          final siteDocs = sitesSnapshot.data?.docs ?? [];
-          final siteById = {
-            for (final doc in siteDocs)
-              doc.id: Site.fromMap({...doc.data(), 'siteId': doc.id}),
-          };
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('sites').snapshots(),
+      builder: (context, sitesSnapshot) {
+        final siteDocs = sitesSnapshot.data?.docs ?? [];
+        final siteById = {
+          for (final doc in siteDocs)
+            doc.id: Site.fromMap({...doc.data(), 'siteId': doc.id}),
+        };
 
-          return Column(
-            children: [
-              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                // Equality filter only (no orderBy on a second field), same
-                // convention used elsewhere in this app to avoid requiring a
-                // composite Firestore index — sorted client-side below.
-                stream: FirebaseFirestore.instance
-                    .collection('readings')
-                    .where('isAlert', isEqualTo: true)
-                    .snapshots(),
-                builder: (context, alertSnapshot) {
-                  final alertDocs = alertSnapshot.data?.docs ?? [];
-                  final alertReadings =
-                      alertDocs
-                          .map(
-                            (doc) => Reading.fromMap({
-                              ...doc.data(),
-                              'readingId': doc.id,
-                            }),
-                          )
-                          .toList()
-                        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        // Same pending-readings query as before, just relocated one level
+        // up so its result count can also feed the app bar's pending pill
+        // badge, not only the list below.
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('readings')
+              .where('status', isEqualTo: 'pending')
+              .orderBy('timestamp', descending: true)
+              .snapshots(),
+          builder: (context, pendingSnapshot) {
+            final pendingDocs = pendingSnapshot.data?.docs ?? [];
 
-                  _handleAlertReadings(alertReadings, siteById);
-
-                  return _AlertBanner(
-                    readings: alertReadings,
-                    siteById: siteById,
-                  );
-                },
+            return Scaffold(
+              appBar: AppBar(
+                title: const Text('Review Readings'),
+                actions: [
+                  if (pendingSnapshot.hasData)
+                    Center(child: _CountPill(count: pendingDocs.length)),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(Icons.filter_list),
+                    tooltip: 'Filter',
+                    // Visual only for now — no filter logic behind this yet.
+                    onPressed: () {},
+                  ),
+                ],
               ),
-              Expanded(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance
-                      .collection('readings')
-                      .where('status', isEqualTo: 'pending')
-                      .orderBy('timestamp', descending: true)
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Text(
-                          'Failed to load readings: ${snapshot.error}',
-                        ),
+              body: Column(
+                children: [
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    // Equality filter only (no orderBy on a second field),
+                    // same convention used elsewhere in this app to avoid
+                    // requiring a composite Firestore index — sorted
+                    // client-side below.
+                    stream: FirebaseFirestore.instance
+                        .collection('readings')
+                        .where('isAlert', isEqualTo: true)
+                        .snapshots(),
+                    builder: (context, alertSnapshot) {
+                      final alertDocs = alertSnapshot.data?.docs ?? [];
+                      final alertReadings =
+                          alertDocs
+                              .map(
+                                (doc) => Reading.fromMap({
+                                  ...doc.data(),
+                                  'readingId': doc.id,
+                                }),
+                              )
+                              .toList()
+                            ..sort(
+                              (a, b) => b.timestamp.compareTo(a.timestamp),
+                            );
+
+                      _handleAlertReadings(alertReadings, siteById);
+
+                      return _AlertBanner(
+                        readings: alertReadings,
+                        siteById: siteById,
                       );
-                    }
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
+                    },
+                  ),
+                  Expanded(
+                    child: Builder(
+                      builder: (context) {
+                        if (pendingSnapshot.hasError) {
+                          return Center(
+                            child: Text(
+                              'Failed to load readings: '
+                              '${pendingSnapshot.error}',
+                            ),
+                          );
+                        }
+                        if (pendingSnapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+                        if (pendingDocs.isEmpty) {
+                          return const Center(
+                            child: Text('No pending readings'),
+                          );
+                        }
 
-                    final docs = snapshot.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Center(child: Text('No pending readings'));
-                    }
+                        final readings = pendingDocs
+                            .map(
+                              (doc) => Reading.fromMap({
+                                ...doc.data(),
+                                'readingId': doc.id,
+                              }),
+                            )
+                            .toList();
 
-                    final readings = docs
-                        .map(
-                          (doc) => Reading.fromMap({
-                            ...doc.data(),
-                            'readingId': doc.id,
-                          }),
-                        )
-                        .toList();
-
-                    return ListView.builder(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: readings.length,
-                      itemBuilder: (context, index) => _ReadingCard(
-                        reading: readings[index],
-                      ),
-                    );
-                  },
-                ),
+                        return ListView.builder(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: readings.length,
+                          itemBuilder: (context, index) => _ReadingCard(
+                            reading: readings[index],
+                            site: siteById[readings[index].siteId],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-            ],
-          );
-        },
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _CountPill extends StatelessWidget {
+  const _CountPill({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade100,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+      ),
+      child: Text(
+        '$count Pending',
+        style: TextStyle(
+          color: Colors.orange.shade800,
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+        ),
       ),
     );
   }
@@ -237,9 +295,10 @@ class _AlertBannerRow extends StatelessWidget {
 }
 
 class _ReadingCard extends StatelessWidget {
-  const _ReadingCard({required this.reading});
+  const _ReadingCard({required this.reading, required this.site});
 
   final Reading reading;
+  final Site? site;
 
   Future<void> _approve(BuildContext context) async {
     try {
@@ -286,6 +345,9 @@ class _ReadingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final siteName = site?.name ?? reading.siteId;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -294,52 +356,118 @@ class _ReadingCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: AspectRatio(
-                aspectRatio: 4 / 3,
-                child: Image.network(
-                  reading.photoUrl,
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, progress) {
-                    if (progress == null) return child;
-                    return const Center(child: CircularProgressIndicator());
-                  },
-                  errorBuilder: (context, error, stackTrace) => const Center(
-                    child: Icon(Icons.broken_image, size: 48),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+              child: Stack(
+                children: [
+                  AspectRatio(
+                    aspectRatio: 4 / 3,
+                    child: Image.network(
+                      reading.photoUrl,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return const Center(
+                          child: CircularProgressIndicator(),
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) =>
+                          const Center(child: Icon(Icons.broken_image, size: 48)),
+                    ),
                   ),
-                ),
+                  Positioned(
+                    left: 8,
+                    top: 8,
+                    child: _SitePillOverlay(siteName: siteName),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 12),
             _SiteNameLabel(siteId: reading.siteId),
             const SizedBox(height: 4),
-            Text('Submitted: ${_formatTimestamp(reading.timestamp)}'),
+            _SubmitterLabel(
+              uid: reading.submittedBy,
+              timeText: _formatTimestamp(reading.timestamp),
+            ),
+            const SizedBox(height: 2),
             Text(
               'Location: ${reading.latitude.toStringAsFixed(5)}, '
               '${reading.longitude.toStringAsFixed(5)}',
+              style: textTheme.labelSmall?.copyWith(
+                color: AppColors.onSurfaceVariant,
+              ),
             ),
             _LevelComparison(reading: reading),
-            const SizedBox(height: 12),
-            Row(
+            if (reading.phLevel != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('pH: ${reading.phLevel!.toStringAsFixed(1)}'),
+              ),
+            if (site != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Summary',
+                style: textTheme.labelSmall?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                generateReadingSummary(reading, site!, null),
+                style: textTheme.bodyMedium,
+              ),
+            ],
+            const SizedBox(height: 16),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _reject(context),
-                    icon: const Icon(Icons.close),
-                    label: const Text('Reject'),
+                OutlinedButton.icon(
+                  onPressed: () => _reject(context),
+                  icon: const Icon(Icons.close),
+                  label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade600,
+                    side: BorderSide(color: Colors.red.shade600),
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _approve(context),
-                    icon: const Icon(Icons.check),
-                    label: const Text('Approve'),
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  onPressed: () => _approve(context),
+                  icon: const Icon(Icons.check),
+                  label: const Text('Approve'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green.shade600,
+                    foregroundColor: Colors.white,
                   ),
                 ),
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SitePillOverlay extends StatelessWidget {
+  const _SitePillOverlay({required this.siteName});
+
+  final String siteName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+      ),
+      child: Text(
+        siteName,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -368,6 +496,32 @@ class _SiteNameLabel extends StatelessWidget {
   }
 }
 
+class _SubmitterLabel extends StatelessWidget {
+  const _SubmitterLabel({required this.uid, this.timeText});
+
+  final String uid;
+  final String? timeText;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: UserLookupService.getDisplayName(uid),
+      builder: (context, snapshot) {
+        final displayName = snapshot.data ?? uid;
+        final text = timeText == null
+            ? 'Submitted by: $displayName'
+            : 'Officer: $displayName • $timeText';
+        return Text(
+          text,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: AppColors.onSurfaceVariant,
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _LevelComparison extends StatelessWidget {
   const _LevelComparison({required this.reading});
 
@@ -387,22 +541,33 @@ class _LevelComparison extends StatelessWidget {
     if (manual != null && ai != null) {
       final mismatch = (manual - ai).abs() > _mismatchThreshold;
       return Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
+        padding: const EdgeInsets.only(top: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'AI: ${ai.toStringAsFixed(1)}m | '
-              'Officer: ${manual.toStringAsFixed(1)}m',
-              style: TextStyle(
-                fontWeight: mismatch ? FontWeight.bold : FontWeight.normal,
-                color: mismatch ? Colors.red.shade700 : null,
-              ),
-            ),
             if (mismatch) ...[
-              const SizedBox(width: 6),
-              const Text('⚠️ Mismatch'),
+              const _MismatchBanner(),
+              const SizedBox(height: 8),
             ],
+            Row(
+              children: [
+                Expanded(
+                  child: _ComparisonCell(
+                    label: 'MANUAL INPUT',
+                    value: '${manual.toStringAsFixed(1)}m',
+                    highlight: mismatch,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ComparisonCell(
+                    label: 'AI DETECTED',
+                    value: '${ai.toStringAsFixed(1)}m',
+                    highlight: mismatch,
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       );
@@ -410,14 +575,104 @@ class _LevelComparison extends StatelessWidget {
 
     if (manual != null) {
       return Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Text('Manual level: ${manual.toStringAsFixed(1)}m'),
+        padding: const EdgeInsets.only(top: 8),
+        child: _ComparisonCell(
+          label: 'MANUAL INPUT',
+          value: '${manual.toStringAsFixed(1)}m',
+          highlight: false,
+        ),
       );
     }
 
     return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Text('AI-detected level: ${ai!.toStringAsFixed(1)}m'),
+      padding: const EdgeInsets.only(top: 8),
+      child: _ComparisonCell(
+        label: 'AI DETECTED',
+        value: '${ai!.toStringAsFixed(1)}m',
+        highlight: false,
+      ),
+    );
+  }
+}
+
+class _MismatchBanner extends StatelessWidget {
+  const _MismatchBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            color: Colors.orange.shade800,
+            size: 18,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'AI and manual readings differ significantly',
+              style: TextStyle(
+                color: Colors.orange.shade800,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComparisonCell extends StatelessWidget {
+  const _ComparisonCell({
+    required this.label,
+    required this.value,
+    required this.highlight,
+  });
+
+  final String label;
+  final String value;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      decoration: BoxDecoration(
+        color: highlight ? Colors.orange.shade50 : AppColors.secondaryContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: highlight ? Colors.orange.shade800 : AppColors.onSurface,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
