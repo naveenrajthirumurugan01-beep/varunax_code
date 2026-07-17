@@ -8,6 +8,8 @@ class Site {
   final String siteCode;
   final String riverName;
   final double dangerLevel;
+  final double? minGaugeHeight;
+  final double? maxGaugeHeight;
 
   Site({
     required this.siteId,
@@ -19,6 +21,8 @@ class Site {
     required this.siteCode,
     required this.riverName,
     required this.dangerLevel,
+    this.minGaugeHeight,
+    this.maxGaugeHeight,
   });
 
   factory Site.fromMap(Map<String, dynamic> map) {
@@ -32,6 +36,8 @@ class Site {
       siteCode: map['siteCode'] as String,
       riverName: map['riverName'] as String,
       dangerLevel: (map['dangerLevel'] as num).toDouble(),
+      minGaugeHeight: (map['minGaugeHeight'] as num?)?.toDouble(),
+      maxGaugeHeight: (map['maxGaugeHeight'] as num?)?.toDouble(),
     );
   }
 
@@ -46,6 +52,15 @@ class Site {
       'siteCode': siteCode,
       'riverName': riverName,
       'dangerLevel': dangerLevel,
+      'minGaugeHeight': minGaugeHeight,
+      'maxGaugeHeight': maxGaugeHeight,
     };
+  }
+
+  double getCalibratedLevel(double waterLinePercent) {
+    final minH = minGaugeHeight ?? (dangerLevel * 0.7);
+    final maxH = maxGaugeHeight ?? (dangerLevel * 1.15);
+    final calibrated = minH + (maxH - minH) * (1.0 - waterLinePercent / 100.0);
+    return calibrated;
   }
 }

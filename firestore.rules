@@ -1,0 +1,65 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && getUserData().role == role;
+    }
+
+    function isSupervisorOrAnalyst() {
+      return hasRole('supervisor') || hasRole('analyst');
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Sites Collection
+    match /sites/{siteId} {
+      allow read: if isAuthenticated();
+      allow write: if isSupervisorOrAnalyst();
+    }
+
+    // Readings Collection
+    match /readings/{readingId} {
+      allow read: if isAuthenticated();
+      
+      allow create: if isAuthenticated()
+        && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && (!('manualLevel' in request.resource.data) || request.resource.data.manualLevel == null || request.resource.data.manualLevel >= 0)
+        && (!('aiDetectedLevel' in request.resource.data) || request.resource.data.aiDetectedLevel == null || request.resource.data.aiDetectedLevel >= 0);
+
+      allow update: if isAuthenticated()
+        && (
+          // Field officers can update their own pending readings
+          (request.auth.uid == resource.data.submittedBy && resource.data.status == 'pending' && request.resource.data.status == 'pending')
+          ||
+          // Supervisors and Analysts can approve/reject and add notes
+          (isSupervisorOrAnalyst() 
+            && request.resource.data.submittedBy == resource.data.submittedBy
+            && request.resource.data.manualLevel == resource.data.manualLevel
+            && request.resource.data.aiDetectedLevel == resource.data.aiDetectedLevel)
+        );
+
+      allow delete: if isSupervisorOrAnalyst();
+    }
+
+    // Weather Data Collection
+    match /weather_data/{weatherId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+  }
+}
