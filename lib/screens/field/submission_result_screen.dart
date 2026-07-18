@@ -86,7 +86,9 @@ class SubmissionResultScreen extends StatelessWidget {
                     ? 'Alert triggered'
                     : 'Reading recorded successfully',
                 textAlign: TextAlign.center,
-                style: textTheme.headlineLarge,
+                style: textTheme.headlineLarge?.copyWith(
+                  color: const Color(0xFF000000),
+                ),
               ),
               const SizedBox(height: 24),
               Row(
@@ -120,7 +122,9 @@ class SubmissionResultScreen extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 generateReadingSummary(reading, site, weather),
-                style: textTheme.bodyMedium,
+                style: textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF1A1A1A),
+                ),
               ),
               const SizedBox(height: 24),
               Text(

@@ -76,7 +76,12 @@ class SupervisorHomeScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Good Morning, Supervisor.', style: textTheme.headlineLarge),
+            Text(
+              'Good Morning, Supervisor.',
+              style: textTheme.headlineLarge?.copyWith(
+                color: const Color(0xFF000000),
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               'Here is your daily oversight summary.',
@@ -149,9 +154,10 @@ class _HomeActionCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF000000),
+                  ),
                 ),
               ),
               const Icon(Icons.chevron_right, color: AppColors.onSurfaceVariant),

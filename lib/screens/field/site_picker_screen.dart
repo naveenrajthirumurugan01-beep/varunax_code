@@ -22,7 +22,8 @@ class SitePickerScreen extends StatelessWidget {
                 Expanded(
                   child: Text(
                     'Active Sites',
-                    style: Theme.of(context).textTheme.headlineMedium,
+                    style: Theme.of(context).textTheme.headlineMedium
+                        ?.copyWith(color: const Color(0xFF000000)),
                   ),
                 ),
                 // Visual only for now — no filter logic behind this yet.
@@ -38,7 +39,10 @@ class SitePickerScreen extends StatelessWidget {
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   return Center(
-                    child: Text('Failed to load sites: ${snapshot.error}'),
+                    child: Text(
+                      'Failed to load sites: ${snapshot.error}',
+                      style: const TextStyle(color: Color(0xFF1A1A1A)),
+                    ),
                   );
                 }
                 if (snapshot.connectionState == ConnectionState.waiting) {
@@ -53,6 +57,7 @@ class SitePickerScreen extends StatelessWidget {
                       child: Text(
                         'No sites available. Contact your supervisor.',
                         textAlign: TextAlign.center,
+                        style: TextStyle(color: Color(0xFF1A1A1A)),
                       ),
                     ),
                   );
@@ -161,7 +166,12 @@ class _SiteCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(site.name, style: textTheme.bodyLarge),
+                    Text(
+                      site.name,
+                      style: textTheme.bodyLarge?.copyWith(
+                        color: const Color(0xFF1A1A1A),
+                      ),
+                    ),
                     Text(
                       site.riverName,
                       style: textTheme.bodyMedium?.copyWith(

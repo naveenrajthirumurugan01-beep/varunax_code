@@ -62,10 +62,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
         await showDialog<void>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('⚠️ Water Level Alert'),
+            title: const Text(
+              '⚠️ Water Level Alert',
+              style: TextStyle(color: Color(0xFF000000)),
+            ),
             content: Text(
               '⚠️ Water Level Alert — $siteName has exceeded its danger '
               'threshold',
+              style: const TextStyle(color: Color(0xFF1A1A1A)),
             ),
             actions: [
               TextButton(
@@ -160,6 +164,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                             child: Text(
                               'Failed to load readings: '
                               '${pendingSnapshot.error}',
+                              style: const TextStyle(color: Color(0xFF1A1A1A)),
                             ),
                           );
                         }
@@ -171,7 +176,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
                         }
                         if (pendingDocs.isEmpty) {
                           return const Center(
-                            child: Text('No pending readings'),
+                            child: Text(
+                              'No pending readings',
+                              style: TextStyle(color: Color(0xFF1A1A1A)),
+                            ),
                           );
                         }
 
@@ -406,7 +414,10 @@ class _ReadingCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 child: Row(
                   children: [
-                    Text('pH: ${reading.phLevel!.toStringAsFixed(1)}'),
+                    Text(
+                      'pH: ${reading.phLevel!.toStringAsFixed(1)}',
+                      style: const TextStyle(color: Color(0xFF1A1A1A)),
+                    ),
                     if (reading.waterQualityStatus != null) ...[
                       const SizedBox(width: 8),
                       _WaterQualityBadge(status: reading.waterQualityStatus!),
@@ -459,7 +470,9 @@ class _ReadingCard extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 generateReadingSummary(reading, site!, null),
-                style: textTheme.bodyMedium,
+                style: textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF1A1A1A),
+                ),
               ),
             ],
             const SizedBox(height: 16),
@@ -534,7 +547,11 @@ class _SiteNameLabel extends StatelessWidget {
         final siteName = data != null ? Site.fromMap(data).name : siteId;
         return Text(
           siteName,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Color(0xFF1A1A1A),
+          ),
         );
       },
     );

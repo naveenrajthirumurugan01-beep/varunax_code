@@ -51,7 +51,11 @@
       "Bash(gcloud config *)",
       "Bash(firebase --help)",
       "Bash(firebase firestore:delete *)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(mkdir -p /tmp/vx_merge)",
+      "Bash(git show *)",
+      "Read(//tmp/vx_merge/**)",
+      "Bash(grep -v \"^\\\\s*[0-9]*://\\\\|//\")"
     ]
   }
 }

@@ -506,7 +506,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'No internet â€” reading saved locally, will sync automatically',
+              'No internet — reading saved locally, will sync automatically',
             ),
           ),
         );
@@ -662,7 +662,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.site.name, style: textTheme.headlineLarge),
+            Text(
+              widget.site.name,
+              style: textTheme.headlineLarge?.copyWith(
+                color: const Color(0xFF000000),
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               widget.site.riverName,
@@ -694,7 +699,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.gaugePostReading, style: textTheme.headlineMedium),
+            Text(
+              l10n.gaugePostReading,
+              style: textTheme.headlineMedium?.copyWith(
+                color: const Color(0xFF000000),
+              ),
+            ),
             const SizedBox(height: 12),
             Text(l10n.waterLevelReading, style: textTheme.labelMedium),
             const SizedBox(height: 8),
@@ -740,7 +750,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'AI-assisted reading detection isn\'t available on web â€” '
+                      'AI-assisted reading detection isn\'t available on web — '
                       'please enter the level manually.',
                       style: textTheme.labelSmall?.copyWith(
                         color: AppColors.onSurfaceVariant,
@@ -800,7 +810,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Auto-filled by AI â€” please verify before submitting',
+                        'Auto-filled by AI — please verify before submitting',
                         style: textTheme.labelSmall?.copyWith(
                           fontStyle: FontStyle.italic,
                           color: AppColors.primary,
@@ -813,7 +823,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     _aiDetectedWaterLinePercent != null) ...[
                   const SizedBox(height: 4),
                   Text(
-                    'Calibrated from image analysis â€” water line detected at '
+                    'Calibrated from image analysis — water line detected at '
                     '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
                     'frame height.',
                     style: textTheme.labelSmall?.copyWith(
@@ -879,7 +889,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.phStripReading, style: textTheme.headlineMedium),
+            Text(
+              l10n.phStripReading,
+              style: textTheme.headlineMedium?.copyWith(
+                color: const Color(0xFF000000),
+              ),
+            ),
             const SizedBox(height: 12),
             Text('pH Level (optional)', style: textTheme.labelMedium),
             const SizedBox(height: 8),
@@ -898,7 +913,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Low confidence â€” please verify manually',
+                        'Low confidence — please verify manually',
                         style: textTheme.labelSmall?.copyWith(
                           color: AppColors.error,
                           fontWeight: FontWeight.w600,
@@ -921,7 +936,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      "Couldn't read a pH strip in that photo â€” please "
+                      "Couldn't read a pH strip in that photo — please "
                       'enter the value manually.',
                       style: textTheme.labelSmall?.copyWith(
                         color: AppColors.onSurfaceVariant,
@@ -954,7 +969,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
               // strip scanning from a phone photo is inherently sensitive
               // to lighting and is not a lab-grade measurement.
               'Color-based strip scanning is approximate and affected by '
-              'lighting â€” not a lab-grade measurement. Leave blank if '
+              'lighting — not a lab-grade measurement. Leave blank if '
               'unavailable.',
               style: textTheme.labelSmall?.copyWith(
                 color: AppColors.onSurfaceVariant,
@@ -975,7 +990,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
             children: [
               CircularProgressIndicator(),
               SizedBox(height: 16),
-              Text('Checking your location...'),
+              Text(
+                'Checking your location...',
+                style: TextStyle(color: Color(0xFF1A1A1A)),
+              ),
             ],
           ),
         );
@@ -1008,7 +1026,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF1A1A1A),
+              ),
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
@@ -1327,7 +1347,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                     SizedBox(width: 12),
-                    Text('Saving reading...'),
+                    Text(
+                      'Saving reading...',
+                      style: TextStyle(color: Color(0xFF1A1A1A)),
+                    ),
                   ],
                 )
               : Column(
@@ -1417,17 +1440,28 @@ class _SiteWeatherCardState extends State<_SiteWeatherCard> {
                 ),
                 const SizedBox(height: 8),
                 if (latest == null)
-                  const Text('No weather data recorded yet â€” fetching...')
+                  const Text(
+                    'No weather data recorded yet — fetching...',
+                    style: TextStyle(color: Color(0xFF1A1A1A)),
+                  )
                 else ...[
                   Text(
                     'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
                     '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
                   ),
                   Text(
-                    'Temperature: ${latest.temperature.toStringAsFixed(1)}Â°C',
+                    'Temperature: ${latest.temperature.toStringAsFixed(1)}°C',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
                   ),
-                  Text('Humidity: ${latest.humidity.toStringAsFixed(0)}%'),
-                  Text('Conditions: ${latest.weatherDescription}'),
+                  Text(
+                    'Humidity: ${latest.humidity.toStringAsFixed(0)}%',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
+                  Text(
+                    'Conditions: ${latest.weatherDescription}',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
                 ],
               ],
             );
@@ -1634,7 +1668,10 @@ class _PhResultCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             'AI Predicted pH: ${result.ph.toStringAsFixed(1)}',
-            style: const TextStyle(fontWeight: FontWeight.w600),
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1A1A1A),
+            ),
           ),
           const SizedBox(height: 2),
           Text(
@@ -1642,10 +1679,13 @@ class _PhResultCard extends StatelessWidget {
             style: TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 6),
-          Text(assessment.description, style: const TextStyle(fontSize: 12)),
+          Text(
+            assessment.description,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
+          ),
           const SizedBox(height: 4),
           Text(
-            'Color-based estimate from a strip photo â€” affected by '
+            'Color-based estimate from a strip photo — affected by '
             'lighting and not a lab-grade measurement.',
             style: TextStyle(
               fontSize: 10,
