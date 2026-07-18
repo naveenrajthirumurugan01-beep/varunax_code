@@ -137,6 +137,9 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final user = AuthService().currentUser;
+    final uid = user?.uid;
+
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('sites').snapshots(),
       builder: (context, sitesSnapshot) {
@@ -223,6 +226,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                   body = SingleChildScrollView(
                     child: Column(
                       children: [
+                        _WelcomeHeader(uid: uid, email: user?.email),
                         // Alerts are safety-critical, so they stay visible
                         // regardless of which tab is active below.
                         _AlertBanner(
@@ -612,6 +616,70 @@ class _StatCard extends StatelessWidget {
   }
 }
 
+class _WelcomeHeader extends StatelessWidget {
+  const _WelcomeHeader({required this.uid, required this.email});
+
+  final String? uid;
+  final String? email;
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid == null) return const SizedBox.shrink();
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      builder: (context, snapshot) {
+        final userData = snapshot.data?.data() as Map<String, dynamic>?;
+        final userName = userData?['name'] ?? email ?? 'Analyst';
+
+        return Padding(
+          padding: const EdgeInsets.only(left: 12, right: 12, top: 12),
+          child: Card(
+            elevation: 1,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: Colors.blue.shade50,
+                    child: Icon(Icons.analytics, size: 22, color: Colors.blue.shade600),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Welcome, $userName!',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          'Analyst Panel — monitor flood indicators and trend reports',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _FilterRow extends StatelessWidget {
   const _FilterRow({
     required this.statusFilter,
@@ -748,57 +816,96 @@ class _ReadingCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                flex: 3,
-                child: Text(
-                  siteIdText,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              Expanded(
-                flex: 3,
-                child: Text(
-                  _formatTimestamp(reading.timestamp),
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ),
-              Expanded(
-                flex: 2,
-                child: Text(
-                  level != null ? '${level.toStringAsFixed(1)}m' : 'â€”',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Expanded(
-                flex: 2,
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(
-                        AppSpacing.radiusPill,
-                      ),
-                      border: Border.all(color: color),
-                    ),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 3,
                     child: Text(
-                      reading.status,
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 11,
+                      siteIdText,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Expanded(
+                    flex: 3,
+                    child: Text(
+                      _formatTimestamp(reading.timestamp),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      level != null ? '${level.toStringAsFixed(1)}m' : 'â€”',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(
+                            AppSpacing.radiusPill,
+                          ),
+                          border: Border.all(color: color),
+                        ),
+                        child: Text(
+                          reading.status,
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 11,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ),
+              if (reading.isSubmerged) ...[
+                const SizedBox(height: 4),
+                const Row(
+                  children: [
+                    Icon(Icons.warning, color: Colors.red, size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      'Gauge Submerged!',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (reading.isBlurryOrDark) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.image, color: Colors.orange.shade700, size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Quality Issue',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -1007,6 +1114,16 @@ class _ReadingDetailDialog extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                if (reading.isSubmerged)
+                  const _DetailRow(
+                    label: 'Submerged Gauge',
+                    value: 'YES - Water level is at/above max gauge height!',
+                  ),
+                if (reading.isBlurryOrDark)
+                  const _DetailRow(
+                    label: 'Quality Issues',
+                    value: 'YES - Image flagged as blurry or too dark',
                   ),
                 if (reading.supervisorNote != null &&
                     reading.supervisorNote!.isNotEmpty)

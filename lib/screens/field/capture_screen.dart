@@ -17,6 +17,7 @@ import '../../models/weather_reading_model.dart';
 import '../../services/ai_detection_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cloudinary_service.dart';
+import '../../services/image_quality_service.dart';
 import '../../services/location_service.dart';
 import '../../services/ph_detection_service.dart';
 import '../../services/push_sender_service.dart';
@@ -67,6 +68,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   bool _isDetectingWaterLine = false;
   double? _aiDetectedWaterLinePercent;
+
+  // Tracks whether the level field currently holds a value we filled in from
+  // AI detection (vs one the officer typed) so the UI knows whether to show
+  // the "please verify" label and whether a later detection is still allowed
+  // to overwrite the field.
+  bool _isLevelAutoFilled = false;
+  bool _userEditedLevel = false;
+  double? _aiCalibratedSegmentationLevel;
+  bool _isSubmerged = false;
+  bool _isBlurryOrDark = false;
 
   double? get _parsedLevel => double.tryParse(_levelController.text.trim());
 
@@ -213,6 +224,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _capturedPhotoBytes = bytes;
         _stage = _CaptureStage.preview;
       });
+      unawaited(_checkImageQuality(photo.path));
       unawaited(_runAiDetection(photo.path));
       unawaited(_runSegmentation(photo.path));
     } catch (e) {
@@ -220,6 +232,24 @@ class _CaptureScreenState extends State<CaptureScreen> {
       setState(() {
         _errorMessage = 'Failed to capture photo: $e';
       });
+    }
+  }
+
+  Future<void> _checkImageQuality(String imagePath) async {
+    final result = await ImageQualityService().analyzeImage(imagePath);
+    if (!mounted) return;
+    setState(() {
+      _isBlurryOrDark = result.isBlurry || result.isDark;
+    });
+    if (_isBlurryOrDark) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '⚠️ Warning: Image appears blurry or too dark. Please consider retaking for an accurate reading.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 
@@ -275,6 +305,21 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _isDetectingWaterLine = false;
       _aiDetectedWaterLinePercent = result?.waterLinePercent;
+      if (result != null) {
+        final calibrated = widget.site.getCalibratedLevel(result.waterLinePercent);
+        _aiCalibratedSegmentationLevel = calibrated;
+
+        // If water reaches the top of the frame (waterLinePercent <= 5%) and OCR fails,
+        // flag the gauge post as submerged and default level to max calibrated point.
+        if (result.waterLinePercent <= 5.0 && _aiDetectedLevel == null) {
+          _isSubmerged = true;
+        }
+
+        if (_aiDetectedLevel == null && !_userEditedLevel) {
+          _levelController.text = _formatLevel(_isSubmerged ? (widget.site.maxGaugeHeight ?? widget.site.dangerLevel * 1.15) : calibrated);
+          _isLevelAutoFilled = true;
+        }
+      }
     });
   }
 
@@ -287,6 +332,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
       _aiDetectedLevel = null;
       _isDetectingWaterLine = false;
       _aiDetectedWaterLinePercent = null;
+      _isLevelAutoFilled = false;
+      _userEditedLevel = false;
+      _aiCalibratedSegmentationLevel = null;
+      _isSubmerged = false;
+      _isBlurryOrDark = false;
     });
   }
 
@@ -440,12 +490,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
           longitude: _userLongitude!,
           photoUrl: '',
           manualLevel: level,
-          aiDetectedLevel: _aiDetectedLevel,
+          aiDetectedLevel: _aiDetectedLevel ?? _aiCalibratedSegmentationLevel,
           status: 'pending',
           supervisorNote: null,
           isAlert: isAlert,
           phLevel: phLevel,
           waterQualityStatus: _waterQualityAssessment?.status,
+          isSubmerged: _isSubmerged,
+          isBlurryOrDark: _isBlurryOrDark,
         );
 
         await SyncService().saveReadingOffline(offlineReading, photo.path);
@@ -501,12 +553,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
         longitude: _userLongitude!,
         photoUrl: photoUrl,
         manualLevel: level,
-        aiDetectedLevel: _aiDetectedLevel,
+        aiDetectedLevel: _aiDetectedLevel ?? _aiCalibratedSegmentationLevel,
         status: 'pending',
         supervisorNote: null,
         isAlert: isAlert,
         phLevel: phLevel,
         waterQualityStatus: _waterQualityAssessment?.status,
+        isSubmerged: _isSubmerged,
+        isBlurryOrDark: _isBlurryOrDark,
       );
 
       await readingRef.set(reading.toMap());
@@ -670,6 +724,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
               decoration: InputDecoration(
                 hintText: l10n.enterLevelHint,
               ),
+              onChanged: (_) => setState(() {
+                _userEditedLevel = true;
+              }),
             ),
             if (kIsWeb) ...[
               const SizedBox(height: 8),
@@ -726,6 +783,64 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       'Analyzing water line...',
                       style: textTheme.labelSmall?.copyWith(
                         color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (_isLevelAutoFilled && !_userEditedLevel) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.auto_awesome,
+                      size: 14,
+                      color: AppColors.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Auto-filled by AI â€” please verify before submitting',
+                        style: textTheme.labelSmall?.copyWith(
+                          fontStyle: FontStyle.italic,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_aiDetectedLevel == null &&
+                    _aiDetectedWaterLinePercent != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Calibrated from image analysis â€” water line detected at '
+                    '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
+                    'frame height.',
+                    style: textTheme.labelSmall?.copyWith(
+                      color: AppColors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+              if (_isSubmerged) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.warning,
+                      size: 16,
+                      color: Colors.red,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Submerged Gauge Warning: Water level appears to be '
+                        'at or above the top of the gauge post! Severe flood risk.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red.shade700,
+                        ),
                       ),
                     ),
                   ],
@@ -996,7 +1111,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   // ClipRect â€” the same technique the camera plugin's own
                   // example app uses for a full-bleed preview.
                   final size = constraints.biggest;
-                  var scale = size.aspectRatio * controller.value.aspectRatio;
+                  var cameraAspectRatio = controller.value.aspectRatio;
+                  if (MediaQuery.of(context).orientation == Orientation.portrait) {
+                    cameraAspectRatio = 1 / cameraAspectRatio;
+                  }
+                  var scale = size.aspectRatio / cameraAspectRatio;
                   if (scale < 1) scale = 1 / scale;
 
                   return ClipRect(
@@ -1004,7 +1123,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       scale: scale,
                       child: Center(
                         child: AspectRatio(
-                          aspectRatio: controller.value.aspectRatio,
+                          aspectRatio: cameraAspectRatio,
                           child: CameraPreview(controller),
                         ),
                       ),
