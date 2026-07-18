@@ -46,3 +46,7 @@ app.*.map.json
 
 # Firebase Admin SDK service account key — sensitive credential, never commit
 assets/service_account.json
+
+# Node dependency tree (installed at project root for one-off admin
+# scripts in /scripts) — never belongs in a Flutter repo's history
+node_modules/
