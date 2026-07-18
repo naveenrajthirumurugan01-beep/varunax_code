@@ -103,25 +103,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  for (final filter in _StatusFilter.values) ...[
-                    Expanded(
-                      child: _StatusFilterPill(
-                        filter: filter,
-                        selected: _filter == filter,
-                        onTap: () => setState(() => _filter = filter),
-                      ),
-                    ),
-                    if (filter != _StatusFilter.values.last)
-                      const SizedBox(width: 8),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
             Expanded(
               child: uid == null
                   ? const Center(
@@ -158,7 +139,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                           'up.'
                                     : 'Failed to load your readings: $error',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(color: Color(0xFF1A1A1A)),
+                                style: const TextStyle(
+                                  color: Color(0xFF1A1A1A),
+                                ),
                               ),
                             ),
                           );
@@ -171,36 +154,94 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         }
 
                         final docs = snapshot.data?.docs ?? [];
-                        final readings = docs
+                        // Full, unfiltered list (before the status-pill
+                        // narrowing below) — reused for the rejected-recent
+                        // banner so it reflects rejections regardless of
+                        // which status pill is currently selected.
+                        final allReadings = docs
                             .map(
                               (doc) => Reading.fromMap({
                                 ...doc.data(),
                                 'readingId': doc.id,
                               }),
                             )
+                            .toList();
+                        final now = DateTime.now();
+                        final recentlyRejected = allReadings
                             .where(
                               (r) =>
-                                  r.status.toLowerCase() == _filter.value,
+                                  r.status.toLowerCase() == 'rejected' &&
+                                  now.difference(r.timestamp).inDays <= 7,
+                            )
+                            .toList();
+                        final readings = allReadings
+                            .where(
+                              (r) => r.status.toLowerCase() == _filter.value,
                             )
                             .toList();
 
-                        if (readings.isEmpty) {
-                          return Center(
-                            child: Text(
-                              'No ${_filter.label.toLowerCase()} readings yet',
-                              style: const TextStyle(color: Color(0xFF1A1A1A)),
-                            ),
-                          );
-                        }
-
-                        return ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                          itemCount: readings.length,
-                          itemBuilder: (context, index) =>
-                              _ReadingHistoryCard(
-                                reading: readings[index],
-                                site: siteById[readings[index].siteId],
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (recentlyRejected.isNotEmpty)
+                              _RejectedReadingsBanner(
+                                count: recentlyRejected.length,
+                                onTap: () => setState(
+                                  () => _filter = _StatusFilter.rejected,
+                                ),
                               ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
+                              child: Row(
+                                children: [
+                                  for (final filter
+                                      in _StatusFilter.values) ...[
+                                    Expanded(
+                                      child: _StatusFilterPill(
+                                        filter: filter,
+                                        selected: _filter == filter,
+                                        onTap: () =>
+                                            setState(() => _filter = filter),
+                                      ),
+                                    ),
+                                    if (filter != _StatusFilter.values.last)
+                                      const SizedBox(width: 8),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Expanded(
+                              child: readings.isEmpty
+                                  ? Center(
+                                      child: Text(
+                                        'No ${_filter.label.toLowerCase()} '
+                                        'readings yet',
+                                        style: const TextStyle(
+                                          color: Color(0xFF1A1A1A),
+                                        ),
+                                      ),
+                                    )
+                                  : ListView.builder(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        0,
+                                        16,
+                                        16,
+                                      ),
+                                      itemCount: readings.length,
+                                      itemBuilder: (context, index) =>
+                                          _ReadingHistoryCard(
+                                            reading: readings[index],
+                                            site:
+                                                siteById[readings[index]
+                                                    .siteId],
+                                          ),
+                                    ),
+                            ),
+                          ],
                         );
                       },
                     ),
@@ -208,6 +249,53 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ],
         );
       },
+    );
+  }
+}
+
+class _RejectedReadingsBanner extends StatelessWidget {
+  const _RejectedReadingsBanner({required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+          border: Border.all(color: Colors.red.shade200),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.red.shade700,
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '⚠️ $count reading${count == 1 ? '' : 's'} rejected — '
+                'tap to review',
+                style: TextStyle(
+                  color: Colors.red.shade900,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            Icon(Icons.chevron_right, color: Colors.red.shade700, size: 18),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -250,7 +338,9 @@ class _StatusFilterPill extends StatelessWidget {
             Text(
               filter.label,
               style: TextStyle(
-                color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
+                color: selected
+                    ? AppColors.onPrimary
+                    : AppColors.onSurfaceVariant,
                 fontWeight: FontWeight.w600,
                 fontSize: 13,
               ),

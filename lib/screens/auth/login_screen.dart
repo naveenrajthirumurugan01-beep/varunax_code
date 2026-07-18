@@ -11,6 +11,7 @@ import '../../main.dart' show localeNotifier, setAppLocale;
 import '../../models/site_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
+import 'citizen_registration_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -26,6 +27,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _isLoading = false;
   bool _isSeeding = false;
+  bool _isSeedingCascade = false;
+  bool _isSettingTestRadius = false;
   String? _errorMessage;
 
   @override
@@ -66,6 +69,9 @@ class _LoginScreenState extends State<LoginScreen> {
           break;
         case 'analyst':
           Navigator.pushReplacementNamed(context, '/analyst');
+          break;
+        case 'citizen':
+          Navigator.pushReplacementNamed(context, '/citizen');
           break;
         default:
           setState(() {
@@ -398,6 +404,114 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  // ---- Debug-only: one-time write of downstreamSiteIds onto the sites
+  // already created by _seedTestSites above, based on actual river-basin
+  // connections. Any site not listed here gets an explicit empty list —
+  // safe to tap more than once, since batch.update() just overwrites the
+  // same field each time. ----
+
+  static const Map<String, List<String>> _debugCascadeDownstreamMap = {
+    'site_ka_krs': ['site_tn_mettur'], // KRS Dam on Cauvery feeds Mettur
+    'site_tn_mettur': ['site_tn_bhavanisagar'], // Mettur feeds Bhavani
+    'site_ka_almatti': ['site_ka_tungabhadra'], // Krishna basin
+    'site_ka_bhadra': ['site_ka_tungabhadra'], // Bhadra feeds Tungabhadra
+    'site_kl_mullaperiyar': ['site_kl_idukki'], // Mullaperiyar feeds Periyar
+  };
+
+  Future<void> _seedCascadeData() async {
+    setState(() {
+      _isSeedingCascade = true;
+    });
+
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final batch = firestore.batch();
+      final sitesCollection = firestore.collection('sites');
+
+      for (final site in _debugSeedSites) {
+        batch.update(sitesCollection.doc(site.siteId), {
+          'downstreamSiteIds':
+              _debugCascadeDownstreamMap[site.siteId] ?? <String>[],
+        });
+      }
+
+      await batch.commit();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cascade relationships seeded successfully'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to seed cascade data: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSeedingCascade = false;
+        });
+      }
+    }
+  }
+
+  // ---- Debug-only: one-tap widening of allowedRadius on a handful of dam
+  // sites to 999999 metres, so the field-officer GPS geofence check passes
+  // from anywhere during testing. Safe to tap more than once — batch.update()
+  // just overwrites the same field each time. Remember to reseed real
+  // allowedRadius values (via _seedTestSites) before going to production. ----
+
+  static const List<String> _debugTestRadiusSiteIds = [
+    'site_ka_krs',
+    'site_tn_mettur',
+    'site_tn_bhavanisagar',
+    'site_ka_almatti',
+    'site_ka_tungabhadra',
+  ];
+
+  Future<void> _setTestRadius() async {
+    setState(() {
+      _isSettingTestRadius = true;
+    });
+
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final batch = firestore.batch();
+      final sitesCollection = firestore.collection('sites');
+
+      for (final siteId in _debugTestRadiusSiteIds) {
+        batch.update(sitesCollection.doc(siteId), {
+          'allowedRadius': 999999.0,
+        });
+      }
+
+      await batch.commit();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'allowedRadius set to 999999 on '
+            '${_debugTestRadiusSiteIds.length} sites',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to set test radius: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSettingTestRadius = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -523,6 +637,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             ],
                           ),
                         ),
+                      const SizedBox(height: 16),
+                      Center(
+                        child: TextButton(
+                          onPressed: _isLoading
+                              ? null
+                              : () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        const CitizenRegistrationScreen(),
+                                  ),
+                                ),
+                          child: const Text('Register as Citizen Reporter'),
+                        ),
+                      ),
                       if (kDebugMode) ...[
                         const SizedBox(height: 16),
                         Center(
@@ -544,6 +672,64 @@ class _LoginScreenState extends State<LoginScreen> {
                                   )
                                 : Text(
                                     'Seed Test Sites (Debug)',
+                                    style: textTheme.labelSmall?.copyWith(
+                                      color: AppColors.onSurfaceVariant,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Center(
+                          child: TextButton(
+                            onPressed: _isSeedingCascade
+                                ? null
+                                : _seedCascadeData,
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.onSurfaceVariant,
+                              minimumSize: Size.zero,
+                              padding: EdgeInsets.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: _isSeedingCascade
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Text(
+                                    'Seed Cascade Data (Debug)',
+                                    style: textTheme.labelSmall?.copyWith(
+                                      color: AppColors.onSurfaceVariant,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Center(
+                          child: TextButton(
+                            onPressed: _isSettingTestRadius
+                                ? null
+                                : _setTestRadius,
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.onSurfaceVariant,
+                              minimumSize: Size.zero,
+                              padding: EdgeInsets.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: _isSettingTestRadius
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Text(
+                                    'Set Test Radius (Debug)',
                                     style: textTheme.labelSmall?.copyWith(
                                       color: AppColors.onSurfaceVariant,
                                       decoration: TextDecoration.underline,

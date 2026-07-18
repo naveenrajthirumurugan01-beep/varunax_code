@@ -9,7 +9,10 @@ import '../../models/site_model.dart';
 import '../../models/weather_reading_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/weather_service.dart';
+import '../../utils/cwc_export_action.dart';
 import '../../utils/report_generator.dart';
+import '../../widgets/cascade_risk_banner.dart';
+import 'citizen_reports_screen.dart';
 
 const _statusOptions = ['All', 'Pending', 'Approved', 'Rejected'];
 
@@ -189,6 +192,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                 // (the same already-computed list the alert banner already
                 // used) — same queries throughout, just relocated.
                 final l10n = AppLocalizations.of(context)!;
+                final readingsCount = readingsSnapshot.data?.docs.length ?? 0;
                 final Widget body;
                 if (readingsSnapshot.hasError) {
                   body = Center(
@@ -231,6 +235,11 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                   body = SingleChildScrollView(
                     child: Column(
                       children: [
+                        // Predicted downstream risk from CascadeAlertService
+                        // — sits above everything else, including the
+                        // welcome header, and renders nothing when there
+                        // are no active warnings.
+                        const CascadeRiskBanner(),
                         _WelcomeHeader(uid: uid, email: user?.email),
                         // Alerts are safety-critical, so they stay visible
                         // regardless of which tab is active below.
@@ -315,6 +324,15 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     actions: [
+                      IconButton(
+                        icon: const Icon(Icons.table_chart),
+                        tooltip: readingsCount >= 5
+                            ? 'Download Excel'
+                            : 'Need at least 5 readings',
+                        onPressed: readingsCount >= 5
+                            ? () => exportCwcExcelReport(context)
+                            : null,
+                      ),
                       Padding(
                         padding: const EdgeInsets.only(right: 16),
                         child: _NotificationBell(
@@ -331,11 +349,25 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                     currentIndex: _activeTab == _DashboardTab.overview
                         ? 0
                         : 1,
-                    onTap: (index) => setState(() {
-                      _activeTab = index == 0
-                          ? _DashboardTab.overview
-                          : _DashboardTab.detailed;
-                    }),
+                    // Citizen Reports (index 2) is a separate full-screen
+                    // push, same as History already was on the supervisor
+                    // home screen's bottom nav — it doesn't change
+                    // _activeTab, so currentIndex above is untouched.
+                    onTap: (index) {
+                      if (index == 2) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const CitizenReportsScreen(),
+                          ),
+                        );
+                        return;
+                      }
+                      setState(() {
+                        _activeTab = index == 0
+                            ? _DashboardTab.overview
+                            : _DashboardTab.detailed;
+                      });
+                    },
                     items: [
                       BottomNavigationBarItem(
                         icon: const Icon(Icons.home),
@@ -344,6 +376,10 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                       BottomNavigationBarItem(
                         icon: const Icon(Icons.history),
                         label: l10n.history,
+                      ),
+                      const BottomNavigationBarItem(
+                        icon: Icon(Icons.groups),
+                        label: 'Citizen Reports',
                       ),
                     ],
                   ),

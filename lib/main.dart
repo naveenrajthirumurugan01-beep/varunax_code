@@ -11,6 +11,7 @@ import 'core/theme.dart';
 import 'l10n/app_localizations.dart';
 import 'screens/analyst/analyst_dashboard_screen.dart';
 import 'screens/auth/login_screen.dart';
+import 'screens/citizen/citizen_home_screen.dart';
 import 'screens/field/field_home_screen.dart';
 import 'screens/supervisor/supervisor_home_screen.dart';
 import 'services/notification_service.dart';
@@ -91,6 +92,7 @@ class VarunaXApp extends StatelessWidget {
             '/field': (context) => const FieldHomeScreen(),
             '/supervisor': (context) => const SupervisorHomeScreen(),
             '/analyst': (context) => const AnalystDashboardScreen(),
+            '/citizen': (context) => const CitizenHomeScreen(),
           },
         );
       },

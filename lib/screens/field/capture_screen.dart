@@ -16,6 +16,7 @@ import '../../models/site_model.dart';
 import '../../models/weather_reading_model.dart';
 import '../../services/ai_detection_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/cascade_alert_service.dart';
 import '../../services/cloudinary_service.dart';
 import '../../services/image_quality_service.dart';
 import '../../services/location_service.dart';
@@ -574,6 +575,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
             level,
             widget.site.dangerLevel,
           ),
+        );
+        // Also fire-and-forget: flags any downstream sites as "Elevated
+        // Risk" on the analyst/supervisor dashboards. Fetches all sites
+        // itself, so no new data needs to be threaded through this screen.
+        unawaited(
+          CascadeAlertService().checkAndTriggerCascade(widget.site.siteId),
         );
       }
 

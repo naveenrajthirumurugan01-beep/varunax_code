@@ -5,6 +5,7 @@ import '../../core/theme.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
 import '../../services/user_lookup_service.dart';
+import '../../utils/cwc_export_action.dart';
 import '../../utils/report_generator.dart';
 
 enum _StatusFilter { all, approved, rejected, pending }
@@ -57,110 +58,139 @@ class _HistoryScreenState extends State<HistoryScreen> {
       query = query.where('status', isEqualTo: statusValue);
     }
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('All Readings')),
-      // Sites are fetched once here (rather than per-card) so _HistoryCard
-      // can build a reading summary without an extra Firestore read per
-      // card — mirrors the siteById pattern already used in review_screen.
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('sites').snapshots(),
-        builder: (context, sitesSnapshot) {
-          final siteDocs = sitesSnapshot.data?.docs ?? [];
-          final siteById = {
-            for (final doc in siteDocs)
-              doc.id: Site.fromMap({...doc.data(), 'siteId': doc.id}),
-          };
+    // Separate, unfiltered listener just for the "Download Excel" button's
+    // enabled state — the export itself is always a full, unfiltered
+    // export regardless of the status filter pills above, so the gate
+    // should reflect the true total rather than whatever _filter narrows
+    // the body's own query down to.
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('readings').snapshots(),
+      builder: (context, allReadingsSnapshot) {
+        final totalReadingsCount = allReadingsSnapshot.data?.docs.length ?? 0;
+        final canExport = totalReadingsCount >= 5;
 
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Activity Log',
-                        style: Theme.of(context).textTheme.headlineMedium
-                            ?.copyWith(color: const Color(0xFF000000)),
-                      ),
-                    ),
-                    // Visual only for now — no additional filter logic
-                    // behind this yet.
-                    TextButton(
-                      onPressed: () {},
-                      child: const Text('More Filters'),
-                    ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (final filter in _StatusFilter.values) ...[
-                        _FilterPill(
-                          label: filter.label,
-                          selected: _filter == filter,
-                          onTap: () => setState(() => _filter = filter),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: query.snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Text(
-                          'Failed to load readings: ${snapshot.error}',
-                          style: const TextStyle(color: Color(0xFF1A1A1A)),
-                        ),
-                      );
-                    }
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    final docs = snapshot.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Center(
-                        child: Text(
-                          'No readings found',
-                          style: TextStyle(color: Color(0xFF1A1A1A)),
-                        ),
-                      );
-                    }
-
-                    final readings = docs
-                        .map(
-                          (doc) => Reading.fromMap({
-                            ...doc.data(),
-                            'readingId': doc.id,
-                          }),
-                        )
-                        .toList();
-
-                    return ListView.builder(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: readings.length,
-                      itemBuilder: (context, index) => _HistoryCard(
-                        reading: readings[index],
-                        site: siteById[readings[index].siteId],
-                      ),
-                    );
-                  },
-                ),
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('All Readings'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.table_chart),
+                tooltip: canExport
+                    ? 'Download Excel'
+                    : 'Need at least 5 readings',
+                onPressed: canExport
+                    ? () => exportCwcExcelReport(context)
+                    : null,
               ),
             ],
-          );
-        },
-      ),
+          ),
+          // Sites are fetched once here (rather than per-card) so _HistoryCard
+          // can build a reading summary without an extra Firestore read per
+          // card — mirrors the siteById pattern already used in review_screen.
+          body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance.collection('sites').snapshots(),
+            builder: (context, sitesSnapshot) {
+              final siteDocs = sitesSnapshot.data?.docs ?? [];
+              final siteById = {
+                for (final doc in siteDocs)
+                  doc.id: Site.fromMap({...doc.data(), 'siteId': doc.id}),
+              };
+
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Activity Log',
+                            style: Theme.of(context).textTheme.headlineMedium
+                                ?.copyWith(color: const Color(0xFF000000)),
+                          ),
+                        ),
+                        // Visual only for now — no additional filter logic
+                        // behind this yet.
+                        TextButton(
+                          onPressed: () {},
+                          child: const Text('More Filters'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (final filter in _StatusFilter.values) ...[
+                            _FilterPill(
+                              label: filter.label,
+                              selected: _filter == filter,
+                              onTap: () => setState(() => _filter = filter),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: query.snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return Center(
+                            child: Text(
+                              'Failed to load readings: ${snapshot.error}',
+                              style: const TextStyle(color: Color(0xFF1A1A1A)),
+                            ),
+                          );
+                        }
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+
+                        final docs = snapshot.data?.docs ?? [];
+                        if (docs.isEmpty) {
+                          return const Center(
+                            child: Text(
+                              'No readings found',
+                              style: TextStyle(color: Color(0xFF1A1A1A)),
+                            ),
+                          );
+                        }
+
+                        final readings = docs
+                            .map(
+                              (doc) => Reading.fromMap({
+                                ...doc.data(),
+                                'readingId': doc.id,
+                              }),
+                            )
+                            .toList();
+
+                        return ListView.builder(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: readings.length,
+                          itemBuilder: (context, index) => _HistoryCard(
+                            reading: readings[index],
+                            site: siteById[readings[index].siteId],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }
@@ -239,7 +269,9 @@ class _HistoryCard extends StatelessWidget {
       child: Container(
         decoration: accent == null
             ? null
-            : BoxDecoration(border: Border(left: BorderSide(color: accent, width: 4))),
+            : BoxDecoration(
+                border: Border(left: BorderSide(color: accent, width: 4)),
+              ),
         padding: const EdgeInsets.all(10),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -340,7 +372,11 @@ class _StatusBadge extends StatelessWidget {
       ),
       child: Text(
         status[0].toUpperCase() + status.substring(1),
-        style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+        ),
       ),
     );
   }
@@ -354,8 +390,7 @@ class _SiteNameLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      future:
-          FirebaseFirestore.instance.collection('sites').doc(siteId).get(),
+      future: FirebaseFirestore.instance.collection('sites').doc(siteId).get(),
       builder: (context, snapshot) {
         final data = snapshot.data?.data();
         final siteName = data != null ? Site.fromMap(data).name : siteId;
@@ -389,9 +424,9 @@ class _SubmitterLabel extends StatelessWidget {
             : 'Officer: $displayName • $timeText';
         return Text(
           text,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-            color: AppColors.onSurfaceVariant,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
         );
       },
     );

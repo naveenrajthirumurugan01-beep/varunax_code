@@ -15,6 +15,13 @@ class AuthService {
     );
   }
 
+  Future<UserCredential> createUserWithEmail(String email, String password) {
+    return _firebaseAuth.createUserWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+  }
+
   Future<void> signOut() {
     return _firebaseAuth.signOut();
   }

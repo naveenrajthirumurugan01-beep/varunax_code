@@ -47,7 +47,7 @@ dependencies:
   mobile_scanner: ^7.2.0
   google_mlkit_text_recognition: ^0.16.0
   onnxruntime: ^1.4.1
-  image: ^4.9.1
+  image: ">=4.0.9 <4.4.0" # pinned below 4.4.0: excel needs archive ^3.6.1, which 4.4.0+ dropped for ^4.x
   fl_chart: ^1.2.0
   firebase_messaging: ^16.4.3
   flutter_local_notifications: ^22.0.1
@@ -56,6 +56,8 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   shared_preferences: ^2.5.5
+  excel: ^4.0.6
+  share_plus: ^13.2.1
 
 dev_dependencies:
   flutter_test:

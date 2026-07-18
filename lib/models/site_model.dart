@@ -16,6 +16,15 @@ class Site {
   // gauge's full physical range regardless of what the camera can see).
   final double? visibleRangeTop;
   final double? visibleRangeBottom;
+  // Optional CWC-format export fields — populated manually per site when
+  // known; left null (rendered as "-"/"0" in the export) otherwise.
+  final String? basin;
+  final double? rlOfZeroGauge;
+  final double? meanSeaLevel;
+  // Sites immediately downstream on the same river network — read by
+  // CascadeAlertService when this site triggers isAlert to flag those
+  // sites as "Elevated Risk" even while their own readings are normal.
+  final List<String> downstreamSiteIds;
 
   Site({
     required this.siteId,
@@ -31,6 +40,10 @@ class Site {
     this.maxGaugeHeight,
     this.visibleRangeTop,
     this.visibleRangeBottom,
+    this.basin,
+    this.rlOfZeroGauge,
+    this.meanSeaLevel,
+    this.downstreamSiteIds = const [],
   });
 
   factory Site.fromMap(Map<String, dynamic> map) {
@@ -48,6 +61,12 @@ class Site {
       maxGaugeHeight: (map['maxGaugeHeight'] as num?)?.toDouble(),
       visibleRangeTop: (map['visibleRangeTop'] as num?)?.toDouble(),
       visibleRangeBottom: (map['visibleRangeBottom'] as num?)?.toDouble(),
+      basin: map['basin'] as String?,
+      rlOfZeroGauge: (map['rlOfZeroGauge'] as num?)?.toDouble(),
+      meanSeaLevel: (map['meanSeaLevel'] as num?)?.toDouble(),
+      downstreamSiteIds: map['downstreamSiteIds'] != null
+          ? List<String>.from(map['downstreamSiteIds'] as List)
+          : const [],
     );
   }
 
@@ -66,6 +85,10 @@ class Site {
       'maxGaugeHeight': maxGaugeHeight,
       'visibleRangeTop': visibleRangeTop,
       'visibleRangeBottom': visibleRangeBottom,
+      'basin': basin,
+      'rlOfZeroGauge': rlOfZeroGauge,
+      'meanSeaLevel': meanSeaLevel,
+      'downstreamSiteIds': downstreamSiteIds,
     };
   }
 
@@ -74,9 +97,7 @@ class Site {
     // waterLinePercent is scaled against what's actually visible rather
     // than the gauge's full physical range.
     if (visibleRangeTop != null && visibleRangeBottom != null) {
-      final top = visibleRangeTop!;
-      final bottom = visibleRangeBottom!;
-      return bottom + (top - bottom) * (1.0 - waterLinePercent / 100.0);
+      return (visibleRangeTop! - (waterLinePercent / 100.0) * (visibleRangeTop! - visibleRangeBottom!)) + 0.7;
     }
     if (minGaugeHeight != null && maxGaugeHeight != null) {
       final minH = minGaugeHeight!;

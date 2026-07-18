@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -5,8 +7,10 @@ import '../../core/theme.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
+import '../../services/push_sender_service.dart';
 import '../../services/user_lookup_service.dart';
 import '../../utils/report_generator.dart';
+import '../../widgets/cascade_risk_banner.dart';
 
 String _timeAgo(DateTime dt) {
   final diff = DateTime.now().difference(dt);
@@ -124,6 +128,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
               ),
               body: Column(
                 children: [
+                  // Predicted downstream risk from CascadeAlertService —
+                  // smaller/compact styling here since it sits above an
+                  // already-dense reading queue; renders nothing when
+                  // there are no active warnings.
+                  const CascadeRiskBanner(compact: true),
                   StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     // Equality filter only (no orderBy on a second field),
                     // same convention used elsewhere in this app to avoid
@@ -269,8 +278,21 @@ class _AlertBanner extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          for (final reading in readings)
-            _AlertBannerRow(reading: reading, site: siteById[reading.siteId]),
+          Container(
+            constraints: const BoxConstraints(maxHeight: 200),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final reading in readings)
+                    _AlertBannerRow(
+                      reading: reading,
+                      site: siteById[reading.siteId],
+                    ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -339,6 +361,15 @@ class _ReadingCard extends StatelessWidget {
         'status': 'rejected',
         'supervisorNote': note.isEmpty ? null : note,
       });
+      // Fire-and-forget: must never block or fail the reject action that
+      // triggered it.
+      unawaited(
+        PushSenderService().sendRejectionNotification(
+          reading.submittedBy,
+          site?.name ?? reading.siteId,
+          note,
+        ),
+      );
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

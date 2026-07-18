@@ -71,12 +71,91 @@ class PushSenderService {
     }
   }
 
+  /// Looks up the rejecting reading's field officer's FCM token and pushes
+  /// a rejection notification to them. Never throws — a failed push must
+  /// not block or fail the reject action that triggered it.
+  Future<void> sendRejectionNotification(
+    String fieldOfficerUid,
+    String siteName,
+    String rejectionNote,
+  ) async {
+    try {
+      final userRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(fieldOfficerUid);
+      final userDoc = await userRef.get();
+      final token = userDoc.data()?['fcmToken'] as String?;
+      if (token == null || token.isEmpty) return;
+
+      final client = await _getClient();
+      final body = rejectionNote.isEmpty
+          ? 'Your submission was rejected. Please retake and resubmit.'
+          : 'Your submission was rejected. Reason: $rejectionNote';
+
+      await _sendToToken(
+        client,
+        userRef,
+        token,
+        body,
+        title: '⚠️ Reading Rejected — $siteName',
+      );
+    } catch (e) {
+      debugPrint('PushSenderService.sendRejectionNotification failed: $e');
+    }
+  }
+
+  /// Looks up the citizen reporter's FCM token and notifies them of the
+  /// outcome of an analyst's review of their report. Never throws — a
+  /// failed push must not block or fail the review action that triggered
+  /// it.
+  Future<void> sendCitizenReportUpdate(
+    String citizenUid,
+    String status,
+    String? note,
+  ) async {
+    try {
+      final userRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(citizenUid);
+      final userDoc = await userRef.get();
+      final token = userDoc.data()?['fcmToken'] as String?;
+      if (token == null || token.isEmpty) return;
+
+      final client = await _getClient();
+      final String title;
+      final String body;
+      switch (status) {
+        case 'verified':
+          title = '✅ Report Accepted';
+          body = '✅ Your river report has been accepted by authorities';
+          break;
+        case 'rejected':
+          title = 'Report Not Accepted';
+          body = (note == null || note.isEmpty)
+              ? 'Report not accepted.'
+              : 'Report not accepted. Reason: $note';
+          break;
+        case 'flagged':
+        default:
+          title = '⚠️ Report Flagged for Review';
+          body = (note == null || note.isEmpty)
+              ? 'Your report has been flagged for further review.'
+              : 'Your report has been flagged for further review. Note: $note';
+      }
+
+      await _sendToToken(client, userRef, token, body, title: title);
+    } catch (e) {
+      debugPrint('PushSenderService.sendCitizenReportUpdate failed: $e');
+    }
+  }
+
   Future<void> _sendToToken(
     http.Client client,
     DocumentReference<Map<String, dynamic>> userRef,
     String token,
-    String body,
-  ) async {
+    String body, {
+    String title = '⚠️ Water Level Alert',
+  }) async {
     try {
       final response = await client.post(
         Uri.parse(_fcmSendUrl),
@@ -85,7 +164,7 @@ class PushSenderService {
           'message': {
             'token': token,
             'notification': {
-              'title': '⚠️ Water Level Alert',
+              'title': title,
               'body': body,
             },
           },

@@ -36,10 +36,20 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       
       allow create: if isAuthenticated()
-        && request.resource.data.submittedBy == request.auth.uid
         && request.resource.data.status == 'pending'
         && (!('manualLevel' in request.resource.data) || request.resource.data.manualLevel == null || request.resource.data.manualLevel >= 0)
-        && (!('aiDetectedLevel' in request.resource.data) || request.resource.data.aiDetectedLevel == null || request.resource.data.aiDetectedLevel >= 0);
+        && (!('aiDetectedLevel' in request.resource.data) || request.resource.data.aiDetectedLevel == null || request.resource.data.aiDetectedLevel >= 0)
+        && (
+          // Field officers (and citizens, via their own report submissions)
+          // create readings for themselves.
+          request.resource.data.submittedBy == request.auth.uid
+          ||
+          // Supervisors/analysts create a reading with submittedBy set to
+          // the original citizen reporter's uid when verifying a citizen
+          // report (see citizen_reports below) — submittedBy legitimately
+          // differs from the writer's own uid in that one case.
+          isSupervisorOrAnalyst()
+        );
 
       allow update: if isAuthenticated()
         && (
@@ -58,6 +68,27 @@ service cloud.firestore {
 
     // Weather Data Collection
     match /weather_data/{weatherId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // Citizen Reports Collection
+    match /citizen_reports/{reportId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated()
+        && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.verificationStatus == 'pending';
+
+      // Analysts verify/flag/reject reports (citizen_reports_screen.dart);
+      // supervisors get the same access as everywhere else in these rules.
+      allow update: if isSupervisorOrAnalyst();
+
+      allow delete: if isSupervisorOrAnalyst();
+    }
+
+    // Cascade Warnings Collection
+    match /cascade_warnings/{siteId} {
       allow read: if isAuthenticated();
       allow write: if isAuthenticated();
     }

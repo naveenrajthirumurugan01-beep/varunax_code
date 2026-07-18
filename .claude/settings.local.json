@@ -51,7 +51,16 @@
       "Bash(gcloud config *)",
       "Bash(firebase --help)",
       "Bash(firebase firestore:delete *)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(python3 -c ' *)",
+      "Bash(dart -e ' *)",
+      "Bash(xxd)",
+      "Bash(perl -CSD -i -pe ' *)",
+      "Bash(perl -CSD -i -pe 's/\\\\x{00C2}\\\\x{00B0}/\\\\x{00B0}/g;' lib/screens/analyst/analyst_dashboard_screen.dart)",
+      "Bash(grep -n 'No weather data recorded yet\\\\|Temperature:\\\\|Humidity:\\\\|Conditions:\\\\|Rainfall:\\\\|Failed to load trend\\\\|No readings yet\\\\|No recent level readings\\\\|labels\\\\[index\\\\]\\\\|'\\\\''$label \\($count\\)'\\\\''\\\\|row.site.name\\\\|row.level.toStringAsFixed' lib/screens/analyst/analyst_dashboard_screen.dart)",
+      "Bash(grep -n ''\\\\''$label \\($count\\)'\\\\''\\\\|No recent level readings\\\\|row.site.name\\\\|row.level.toStringAsFixed' lib/screens/analyst/analyst_dashboard_screen.dart)",
+      "Bash(grep -v \"^\\\\s*[0-9]*:\\\\s*//\\\\|^\\\\s*[0-9]*:\\\\s*///\")",
+      "Read(//tmp/**)"
     ]
   }
 }
