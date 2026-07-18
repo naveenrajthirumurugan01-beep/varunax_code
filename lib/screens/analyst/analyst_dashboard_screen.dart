@@ -92,7 +92,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   // Compares this snapshot of active alerts against the previous one
   // (tracked via _seenAlertIds) and pops up a dialog for any reading that
   // wasn't there before. The very first snapshot just establishes the
-  // baseline â€” otherwise every pre-existing alert would trigger a popup the
+  // baseline — otherwise every pre-existing alert would trigger a popup the
   // moment this screen opens.
   void _handleAlertReadings(
     List<Reading> alertReadings,
@@ -118,10 +118,14 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
         await showDialog<void>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('âš ï¸ Water Level Alert'),
+            title: const Text(
+              '⚠️ Water Level Alert',
+              style: TextStyle(color: Color(0xFF000000)),
+            ),
             content: Text(
-              'âš ï¸ Water Level Alert â€” $siteName has exceeded its danger '
+              '⚠️ Water Level Alert — $siteName has exceeded its danger '
               'threshold',
+              style: const TextStyle(color: Color(0xFF1A1A1A)),
             ),
             actions: [
               TextButton(
@@ -137,6 +141,9 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final user = AuthService().currentUser;
+    final uid = user?.uid;
+
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('sites').snapshots(),
       builder: (context, sitesSnapshot) {
@@ -150,7 +157,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           // Equality filter only (no orderBy on a second field), same
           // convention used elsewhere in this app to avoid requiring a
-          // composite Firestore index â€” sorted client-side below.
+          // composite Firestore index — sorted client-side below.
           stream: FirebaseFirestore.instance
               .collection('readings')
               .where('isAlert', isEqualTo: true)
@@ -180,13 +187,14 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                 // Scaffold now lives here, one level deeper than before, so
                 // the app bar's notification bell can reflect alertReadings
                 // (the same already-computed list the alert banner already
-                // used) â€” same queries throughout, just relocated.
+                // used) — same queries throughout, just relocated.
                 final l10n = AppLocalizations.of(context)!;
                 final Widget body;
                 if (readingsSnapshot.hasError) {
                   body = Center(
                     child: Text(
                       'Failed to load readings: ${readingsSnapshot.error}',
+                      style: const TextStyle(color: Color(0xFF1A1A1A)),
                     ),
                   );
                 } else if (readingsSnapshot.connectionState ==
@@ -218,11 +226,12 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                   // Column can't shrink non-Expanded children to fit, so it
                   // overflowed at the bottom instead of scrolling. The
                   // reading list below is no longer its own Expanded/scrolling
-                  // region â€” it's shrink-wrapped into this single scroll view
+                  // region — it's shrink-wrapped into this single scroll view
                   // so nothing gets clipped regardless of content height.
                   body = SingleChildScrollView(
                     child: Column(
                       children: [
+                        _WelcomeHeader(uid: uid, email: user?.email),
                         // Alerts are safety-critical, so they stay visible
                         // regardless of which tab is active below.
                         _AlertBanner(
@@ -256,6 +265,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                               child: Center(
                                 child: Text(
                                   'No readings match the current filter',
+                                  style: TextStyle(color: Color(0xFF1A1A1A)),
                                 ),
                               ),
                             )
@@ -314,7 +324,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                     ],
                   ),
                   body: body,
-                  // Replaces the old top SegmentedButton â€” same _activeTab
+                  // Replaces the old top SegmentedButton — same _activeTab
                   // state, same setState call, just triggered from a bottom
                   // nav bar per the design instead of a top toggle.
                   bottomNavigationBar: BottomNavigationBar(
@@ -347,7 +357,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   }
 }
 
-/// Purely visual 24h/7d toggle â€” has no wiring to the chart below it, which
+/// Purely visual 24h/7d toggle — has no wiring to the chart below it, which
 /// always shows its existing fixed last-30-days window. Local widget state
 /// only, so tapping a pill just changes which one looks selected.
 class _RangeToggle extends StatefulWidget {
@@ -481,7 +491,7 @@ class _AlertBannerRow extends StatelessWidget {
     final siteName = site?.name ?? reading.siteId;
     final dangerLevel = site?.dangerLevel;
     final level = reading.manualLevel ?? reading.aiDetectedLevel;
-    final levelText = level != null ? '${level.toStringAsFixed(1)}m' : 'â€”';
+    final levelText = level != null ? '${level.toStringAsFixed(1)}m' : '—';
     final dangerText = dangerLevel != null
         ? '${dangerLevel.toStringAsFixed(1)}m'
         : 'unknown';
@@ -489,8 +499,8 @@ class _AlertBannerRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Text(
-        'âš ï¸ $siteName: $levelText recorded, exceeds danger level of '
-        '$dangerText â€” ${_timeAgo(reading.timestamp)}',
+        '⚠️ $siteName: $levelText recorded, exceeds danger level of '
+        '$dangerText — ${_timeAgo(reading.timestamp)}',
         style: TextStyle(color: Colors.red.shade900),
       ),
     );
@@ -508,7 +518,7 @@ class _StatsRow extends StatelessWidget {
     final now = DateTime.now();
     // "Approved Today" combines the two filter predicates already used
     // individually elsewhere on this dashboard (today's date, approved
-    // status) â€” no new query, just their intersection over the same
+    // status) — no new query, just their intersection over the same
     // already-fetched readings list.
     final approvedTodayCount = readings
         .where(
@@ -602,12 +612,77 @@ class _StatCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               label,
-              style: const TextStyle(fontSize: 12),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
               textAlign: TextAlign.center,
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _WelcomeHeader extends StatelessWidget {
+  const _WelcomeHeader({required this.uid, required this.email});
+
+  final String? uid;
+  final String? email;
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid == null) return const SizedBox.shrink();
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      builder: (context, snapshot) {
+        final userData = snapshot.data?.data() as Map<String, dynamic>?;
+        final userName = userData?['name'] ?? email ?? 'Analyst';
+
+        return Padding(
+          padding: const EdgeInsets.only(left: 12, right: 12, top: 12),
+          child: Card(
+            elevation: 1,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: Colors.blue.shade50,
+                    child: Icon(Icons.analytics, size: 22, color: Colors.blue.shade600),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Welcome, $userName!',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF000000),
+                          ),
+                        ),
+                        const Text(
+                          'Analyst Panel — monitor flood indicators and trend reports',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -748,57 +823,102 @@ class _ReadingCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                flex: 3,
-                child: Text(
-                  siteIdText,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              Expanded(
-                flex: 3,
-                child: Text(
-                  _formatTimestamp(reading.timestamp),
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ),
-              Expanded(
-                flex: 2,
-                child: Text(
-                  level != null ? '${level.toStringAsFixed(1)}m' : 'â€”',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Expanded(
-                flex: 2,
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(
-                        AppSpacing.radiusPill,
-                      ),
-                      border: Border.all(color: color),
-                    ),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 3,
                     child: Text(
-                      reading.status,
-                      style: TextStyle(
-                        color: color,
+                      siteIdText,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1A1A1A),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Expanded(
+                    flex: 3,
+                    child: Text(
+                      _formatTimestamp(reading.timestamp),
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      level != null ? '${level.toStringAsFixed(1)}m' : '—',
+                      style: const TextStyle(
                         fontWeight: FontWeight.w600,
-                        fontSize: 11,
+                        color: Color(0xFF1A1A1A),
                       ),
                     ),
                   ),
-                ),
+                  Expanded(
+                    flex: 2,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(
+                            AppSpacing.radiusPill,
+                          ),
+                          border: Border.all(color: color),
+                        ),
+                        child: Text(
+                          reading.status,
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
+              if (reading.isSubmerged) ...[
+                const SizedBox(height: 4),
+                const Row(
+                  children: [
+                    Icon(Icons.warning, color: Colors.red, size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      'Gauge Submerged!',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (reading.isBlurryOrDark) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.image, color: Colors.orange.shade700, size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Quality Issue',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -820,7 +940,7 @@ class _ReadingDetailDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // isAlert is already on the Reading itself (no new data) â€” a reading
+    // isAlert is already on the Reading itself (no new data) — a reading
     // that triggered a danger-level alert is called out as "Critical" here
     // rather than showing its ordinary pending/approved/rejected status.
     final isCritical = reading.isAlert;
@@ -844,7 +964,8 @@ class _ReadingDetailDialog extends StatelessWidget {
                     Expanded(
                       child: Text(
                         siteIdText,
-                        style: Theme.of(context).textTheme.titleLarge,
+                        style: Theme.of(context).textTheme.titleLarge
+                            ?.copyWith(color: const Color(0xFF000000)),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -930,7 +1051,12 @@ class _ReadingDetailDialog extends StatelessWidget {
                 else
                   const SizedBox(
                     height: 80,
-                    child: Center(child: Text('Photo not yet uploaded')),
+                    child: Center(
+                      child: Text(
+                        'Photo not yet uploaded',
+                        style: TextStyle(color: Color(0xFF1A1A1A)),
+                      ),
+                    ),
                   ),
                 const SizedBox(height: 16),
                 Row(
@@ -940,7 +1066,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                         label: 'Recorded Level',
                         value: level != null
                             ? '${level.toStringAsFixed(1)}m'
-                            : 'â€”',
+                            : '—',
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -949,7 +1075,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                         label: 'Threshold',
                         value: site != null
                             ? '${site!.dangerLevel.toStringAsFixed(1)}m'
-                            : 'â€”',
+                            : '—',
                       ),
                     ),
                   ],
@@ -995,7 +1121,10 @@ class _ReadingDetailDialog extends StatelessWidget {
                         Expanded(
                           child: Row(
                             children: [
-                              Text(reading.phLevel!.toStringAsFixed(1)),
+                              Text(
+                                reading.phLevel!.toStringAsFixed(1),
+                                style: const TextStyle(color: Color(0xFF1A1A1A)),
+                              ),
                               if (reading.waterQualityStatus != null) ...[
                                 const SizedBox(width: 8),
                                 _WaterQualityBadge(
@@ -1007,6 +1136,16 @@ class _ReadingDetailDialog extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                if (reading.isSubmerged)
+                  const _DetailRow(
+                    label: 'Submerged Gauge',
+                    value: 'YES - Water level is at/above max gauge height!',
+                  ),
+                if (reading.isBlurryOrDark)
+                  const _DetailRow(
+                    label: 'Quality Issues',
+                    value: 'YES - Image flagged as blurry or too dark',
                   ),
                 if (reading.supervisorNote != null &&
                     reading.supervisorNote!.isNotEmpty)
@@ -1025,7 +1164,10 @@ class _ReadingDetailDialog extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Text(generateReadingSummary(reading, site!, null)),
+                  Text(
+                    generateReadingSummary(reading, site!, null),
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
                 ],
                 const SizedBox(height: 16),
                 Align(
@@ -1106,7 +1248,9 @@ class _DetailRow extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(child: Text(value)),
+          Expanded(
+            child: Text(value, style: const TextStyle(color: Color(0xFF1A1A1A))),
+          ),
         ],
       ),
     );
@@ -1134,7 +1278,7 @@ class _WaterQualityBadge extends StatelessWidget {
 
   // Maps the underlying status data value ('Safe'/'Caution'/'Unsafe', also
   // used for the color above and stored as-is on Reading.waterQualityStatus)
-  // to its localized display text â€” display-only.
+  // to its localized display text — display-only.
   String _localizedStatus(AppLocalizations l10n) {
     switch (status) {
       case 'Safe':
@@ -1170,7 +1314,7 @@ class _WaterQualityBadge extends StatelessWidget {
 }
 
 /// New charts section: a per-site trend line (with a danger-level reference
-/// line) plus an all-sites reading-status bar chart. Purely additive â€” the
+/// line) plus an all-sites reading-status bar chart. Purely additive — the
 /// stat cards, filters, and reading list above/below are untouched.
 class _TrendChartsSection extends StatefulWidget {
   const _TrendChartsSection({required this.sites, required this.allReadings});
@@ -1190,7 +1334,10 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
     if (widget.sites.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Text('No sites available yet.'),
+        child: Text(
+          'No sites available yet.',
+          style: TextStyle(color: Color(0xFF1A1A1A)),
+        ),
       );
     }
 
@@ -1218,10 +1365,13 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
                         child: Text(
                           'Water Level Trend',
                           style: Theme.of(context).textTheme.bodyLarge
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                              ?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF000000),
+                              ),
                         ),
                       ),
-                      // Purely decorative â€” this dashboard has no existing
+                      // Purely decorative — this dashboard has no existing
                       // time-range control to restyle, and the underlying
                       // chart always shows the last 30 days regardless of
                       // which pill looks selected. No new filtering logic.
@@ -1240,7 +1390,10 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
                         .map(
                           (s) => DropdownMenuItem(
                             value: s.siteId,
-                            child: Text(s.name),
+                            child: Text(
+                              s.name,
+                              style: const TextStyle(color: Color(0xFF1A1A1A)),
+                            ),
                           ),
                         )
                         .toList(),
@@ -1264,14 +1417,14 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
           ),
           const SizedBox(height: 16),
           const Text(
-            'Water Level â€” all sites (latest reading)',
+            'Water Level — all sites (latest reading)',
             style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
           _AllSitesLevelChart(sites: widget.sites, allReadings: widget.allReadings),
           const SizedBox(height: 16),
           const Text(
-            'Reading Status â€” all sites',
+            'Reading Status — all sites',
             style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
@@ -1280,7 +1433,7 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
           _StatusPieChart(readings: widget.allReadings),
           const SizedBox(height: 16),
           const Text(
-            'Submission Activity â€” last 30 days',
+            'Submission Activity — last 30 days',
             style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
@@ -1305,7 +1458,7 @@ class _SiteTrendLineChart extends StatelessWidget {
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       // Filtered by siteId only (no orderBy on a second field) so this
-      // doesn't require a composite Firestore index â€” sorting/windowing by
+      // doesn't require a composite Firestore index — sorting/windowing by
       // timestamp happens client-side below, same convention the rest of
       // this screen already uses for status/site filtering.
       stream: FirebaseFirestore.instance
@@ -1316,7 +1469,12 @@ class _SiteTrendLineChart extends StatelessWidget {
         if (snapshot.hasError) {
           return SizedBox(
             height: 220,
-            child: Center(child: Text('Failed to load trend: ${snapshot.error}')),
+            child: Center(
+              child: Text(
+                'Failed to load trend: ${snapshot.error}',
+                style: const TextStyle(color: Color(0xFF1A1A1A)),
+              ),
+            ),
           );
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1467,7 +1625,7 @@ class _SiteTrendLineChart extends StatelessWidget {
 /// site (from the `weather_data` collection), with a manual refresh button
 /// that fetches a fresh reading on demand via [WeatherService]. Also
 /// auto-triggers one fetch when a site has no weather data at all yet (same
-/// fallback capture_screen.dart's _SiteWeatherCard already has) â€” without
+/// fallback capture_screen.dart's _SiteWeatherCard already has) — without
 /// this, any site that was never used in the field-capture flow would show
 /// "No weather data recorded yet." indefinitely unless someone remembers to
 /// tap the refresh icon.
@@ -1504,7 +1662,7 @@ class _WeatherSectionState extends State<_WeatherSection> {
         child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           // Equality filter only (no orderBy on a second field), same
           // convention used elsewhere in this app to avoid requiring a
-          // composite Firestore index â€” sorted client-side below to find
+          // composite Firestore index — sorted client-side below to find
           // the most recent entry.
           stream: FirebaseFirestore.instance
               .collection('weather_data')
@@ -1559,15 +1717,28 @@ class _WeatherSectionState extends State<_WeatherSection> {
                   ],
                 ),
                 if (latest == null)
-                  const Text('No weather data recorded yet.')
+                  const Text(
+                    'No weather data recorded yet.',
+                    style: TextStyle(color: Color(0xFF1A1A1A)),
+                  )
                 else ...[
                   Text(
                     'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
                     '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
                   ),
-                  Text('Temperature: ${latest.temperature.toStringAsFixed(1)}Â°C'),
-                  Text('Humidity: ${latest.humidity.toStringAsFixed(0)}%'),
-                  Text('Conditions: ${latest.weatherDescription}'),
+                  Text(
+                    'Temperature: ${latest.temperature.toStringAsFixed(1)}°C',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
+                  Text(
+                    'Humidity: ${latest.humidity.toStringAsFixed(0)}%',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
+                  Text(
+                    'Conditions: ${latest.weatherDescription}',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     'As of ${_formatTimestamp(latest.timestamp)}',
@@ -1583,7 +1754,7 @@ class _WeatherSectionState extends State<_WeatherSection> {
   }
 }
 
-/// Bar chart of reading counts by status across all sites â€” a quick
+/// Bar chart of reading counts by status across all sites — a quick
 /// health-of-data-pipeline view. Fed from the same top-100 readings stream
 /// that already powers the stat cards above, so it updates live too.
 class _StatusBarChart extends StatelessWidget {
@@ -1640,7 +1811,7 @@ class _StatusBarChart extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
                       labels[index],
-                      style: const TextStyle(fontSize: 10),
+                      style: const TextStyle(fontSize: 10, color: Color(0xFF1A1A1A)),
                     ),
                   );
                 },
@@ -1686,7 +1857,7 @@ class _StatusBarChart extends StatelessWidget {
 }
 
 /// Pie chart showing the proportion of readings by status across all
-/// sites â€” the same approved/pending/rejected counts as [_StatusBarChart],
+/// sites — the same approved/pending/rejected counts as [_StatusBarChart],
 /// just a different view of them.
 class _StatusPieChart extends StatelessWidget {
   const _StatusPieChart({required this.readings});
@@ -1709,7 +1880,9 @@ class _StatusPieChart extends StatelessWidget {
     if (total == 0) {
       return const SizedBox(
         height: 120,
-        child: Center(child: Text('No readings yet')),
+        child: Center(
+          child: Text('No readings yet', style: TextStyle(color: Color(0xFF1A1A1A))),
+        ),
       );
     }
 
@@ -1794,7 +1967,10 @@ class _PieLegendEntry extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 4),
-        Text('$label ($count)', style: const TextStyle(fontSize: 11)),
+        Text(
+          '$label ($count)',
+          style: const TextStyle(fontSize: 11, color: Color(0xFF1A1A1A)),
+        ),
       ],
     );
   }
@@ -1843,7 +2019,12 @@ class _AllSitesLevelChart extends StatelessWidget {
     if (rows.isEmpty) {
       return const SizedBox(
         height: 60,
-        child: Center(child: Text('No recent level readings yet')),
+        child: Center(
+          child: Text(
+            'No recent level readings yet',
+            style: TextStyle(color: Color(0xFF1A1A1A)),
+          ),
+        ),
       );
     }
 
@@ -1865,7 +2046,7 @@ class _AllSitesLevelChart extends StatelessWidget {
                   child: Text(
                     row.site.name,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
                   ),
                 ),
                 Expanded(
@@ -1914,6 +2095,7 @@ class _AllSitesLevelChart extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
+                      color: Color(0xFF1A1A1A),
                     ),
                   ),
                 ),
@@ -1926,7 +2108,7 @@ class _AllSitesLevelChart extends StatelessWidget {
 }
 
 /// Calendar-heatmap-style view of reading submission activity over the last
-/// 30 days â€” one square per day, darker for more readings that day. Fed
+/// 30 days — one square per day, darker for more readings that day. Fed
 /// from the same top-100 readings stream as the rest of this dashboard, so
 /// very high-volume days beyond that cap may under-count.
 class _SubmissionHeatmap extends StatelessWidget {

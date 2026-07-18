@@ -13,6 +13,8 @@ class Reading {
   final bool isAlert;
   final double? phLevel;
   final String? waterQualityStatus;
+  final bool isSubmerged;
+  final bool isBlurryOrDark;
 
   Reading({
     required this.readingId,
@@ -29,6 +31,8 @@ class Reading {
     this.isAlert = false,
     this.phLevel,
     this.waterQualityStatus,
+    this.isSubmerged = false,
+    this.isBlurryOrDark = false,
   });
 
   factory Reading.fromMap(Map<String, dynamic> map) {
@@ -49,6 +53,8 @@ class Reading {
       isAlert: map['isAlert'] as bool? ?? false,
       phLevel: (map['phLevel'] as num?)?.toDouble(),
       waterQualityStatus: map['waterQualityStatus'] as String?,
+      isSubmerged: map['isSubmerged'] as bool? ?? false,
+      isBlurryOrDark: map['isBlurryOrDark'] as bool? ?? false,
     );
   }
 
@@ -68,6 +74,8 @@ class Reading {
       'isAlert': isAlert,
       'phLevel': phLevel,
       'waterQualityStatus': waterQualityStatus,
+      'isSubmerged': isSubmerged,
+      'isBlurryOrDark': isBlurryOrDark,
     };
   }
 }

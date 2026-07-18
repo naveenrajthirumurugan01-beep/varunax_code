@@ -80,7 +80,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     Expanded(
                       child: Text(
                         'Activity Log',
-                        style: Theme.of(context).textTheme.headlineMedium,
+                        style: Theme.of(context).textTheme.headlineMedium
+                            ?.copyWith(color: const Color(0xFF000000)),
                       ),
                     ),
                     // Visual only for now — no additional filter logic
@@ -118,6 +119,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       return Center(
                         child: Text(
                           'Failed to load readings: ${snapshot.error}',
+                          style: const TextStyle(color: Color(0xFF1A1A1A)),
                         ),
                       );
                     }
@@ -127,7 +129,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
                     final docs = snapshot.data?.docs ?? [];
                     if (docs.isEmpty) {
-                      return const Center(child: Text('No readings found'));
+                      return const Center(
+                        child: Text(
+                          'No readings found',
+                          style: TextStyle(color: Color(0xFF1A1A1A)),
+                        ),
+                      );
                     }
 
                     final readings = docs
@@ -272,7 +279,10 @@ class _HistoryCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       'Note: ${reading.supervisorNote}',
-                      style: const TextStyle(fontStyle: FontStyle.italic),
+                      style: const TextStyle(
+                        fontStyle: FontStyle.italic,
+                        color: Color(0xFF1A1A1A),
+                      ),
                     ),
                   ],
                   if (site != null) ...[
@@ -286,7 +296,9 @@ class _HistoryCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       generateReadingSummary(reading, site!, null),
-                      style: textTheme.bodyMedium,
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFF1A1A1A),
+                      ),
                     ),
                   ],
                 ],
@@ -349,7 +361,11 @@ class _SiteNameLabel extends StatelessWidget {
         final siteName = data != null ? Site.fromMap(data).name : siteId;
         return Text(
           siteName,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Color(0xFF1A1A1A),
+          ),
         );
       },
     );

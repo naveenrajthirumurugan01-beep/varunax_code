@@ -87,7 +87,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('My Readings', style: textTheme.headlineLarge),
+                  Text(
+                    'My Readings',
+                    style: textTheme.headlineLarge?.copyWith(
+                      color: const Color(0xFF000000),
+                    ),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     'Review and manage your field data submissions.',
@@ -119,7 +124,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
             const SizedBox(height: 8),
             Expanded(
               child: uid == null
-                  ? const Center(child: Text('Not signed in.'))
+                  ? const Center(
+                      child: Text(
+                        'Not signed in.',
+                        style: TextStyle(color: Color(0xFF1A1A1A)),
+                      ),
+                    )
                   : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                       stream: FirebaseFirestore.instance
                           .collection('readings')
@@ -148,6 +158,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                           'up.'
                                     : 'Failed to load your readings: $error',
                                 textAlign: TextAlign.center,
+                                style: const TextStyle(color: Color(0xFF1A1A1A)),
                               ),
                             ),
                           );
@@ -177,6 +188,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           return Center(
                             child: Text(
                               'No ${_filter.label.toLowerCase()} readings yet',
+                              style: const TextStyle(color: Color(0xFF1A1A1A)),
                             ),
                           );
                         }

@@ -121,6 +121,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 120,
       qrCode: 'SITE_TN_METTUR',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_tn_bhavanisagar',
@@ -132,6 +136,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 105,
       qrCode: 'SITE_TN_BHAVANISAGAR',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_tn_vaigai',
@@ -143,6 +151,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 71,
       qrCode: 'SITE_TN_VAIGAI',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_tn_amaravathi',
@@ -154,6 +166,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 100,
       qrCode: 'SITE_TN_AMARAVATHI',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_tn_papanasam',
@@ -165,6 +181,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 143,
       qrCode: 'SITE_TN_PAPANASAM',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_kl_idukki',
@@ -176,6 +196,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 2403,
       qrCode: 'SITE_KL_IDUKKI',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_kl_mullaperiyar',
@@ -187,6 +211,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 142,
       qrCode: 'SITE_KL_MULLAPERIYAR',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_kl_malampuzha',
@@ -198,6 +226,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 115,
       qrCode: 'SITE_KL_MALAMPUZHA',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_kl_banasura',
@@ -209,6 +241,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 775,
       qrCode: 'SITE_KL_BANASURA',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_kl_neyyar',
@@ -220,6 +256,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 25,
       qrCode: 'SITE_KL_NEYYAR',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_ka_krs',
@@ -231,6 +271,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 124.8,
       qrCode: 'SITE_KA_KRS',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_ka_almatti',
@@ -242,6 +286,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 519.6,
       qrCode: 'SITE_KA_ALMATTI',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_ka_tungabhadra',
@@ -253,6 +301,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 1633,
       qrCode: 'SITE_KA_TUNGABHADRA',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_ka_bhadra',
@@ -264,6 +316,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 657,
       qrCode: 'SITE_KA_BHADRA',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
     Site(
       siteId: 'site_ka_linganamakki',
@@ -275,6 +331,10 @@ class _LoginScreenState extends State<LoginScreen> {
       allowedRadius: 300,
       dangerLevel: 1819,
       qrCode: 'SITE_KA_LINGANAMAKKI',
+      minGaugeHeight: 4.0,
+      maxGaugeHeight: 27.0,
+      visibleRangeTop: 9.89,
+      visibleRangeBottom: 4.0,
     ),
   ];
 
@@ -291,6 +351,30 @@ class _LoginScreenState extends State<LoginScreen> {
       for (final site in _debugSeedSites) {
         batch.set(sitesCollection.doc(site.siteId), site.toMap());
       }
+
+      // Seed test users
+      final usersCollection = firestore.collection('users');
+      batch.set(usersCollection.doc('yl98KMpDxmOYbuwHCVAJbSr2ymt2'), {
+        'uid': 'yl98KMpDxmOYbuwHCVAJbSr2ymt2',
+        'name': 'John (Field Officer)',
+        'email': 'field@varunax.com',
+        'role': 'field',
+        'assignedSiteIds': <String>[],
+      });
+      batch.set(usersCollection.doc('PopWUcpIO7MBAhtiHEjtVS8Mt9u2'), {
+        'uid': 'PopWUcpIO7MBAhtiHEjtVS8Mt9u2',
+        'name': 'Sarah (Supervisor)',
+        'email': 'supervisor@varunax.com',
+        'role': 'supervisor',
+        'assignedSiteIds': <String>[],
+      });
+      batch.set(usersCollection.doc('R3xs6CimrgTbECN6LbX9Fvp0CAu1'), {
+        'uid': 'R3xs6CimrgTbECN6LbX9Fvp0CAu1',
+        'name': 'Alex (Analyst)',
+        'email': 'analyst@varunax.com',
+        'role': 'analyst',
+        'assignedSiteIds': <String>[],
+      });
 
       await batch.commit();
 

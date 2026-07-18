@@ -196,7 +196,8 @@ class _QrScanScreenState extends State<QrScanScreen> {
                     Text(
                       'Scan QR Code',
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineLarge,
+                      style: Theme.of(context).textTheme.headlineLarge
+                          ?.copyWith(color: const Color(0xFF000000)),
                     ),
                     const SizedBox(height: 4),
                     Text(

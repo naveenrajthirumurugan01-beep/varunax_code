@@ -17,6 +17,7 @@ import '../../models/weather_reading_model.dart';
 import '../../services/ai_detection_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cloudinary_service.dart';
+import '../../services/image_quality_service.dart';
 import '../../services/location_service.dart';
 import '../../services/ph_detection_service.dart';
 import '../../services/push_sender_service.dart';
@@ -67,6 +68,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   bool _isDetectingWaterLine = false;
   double? _aiDetectedWaterLinePercent;
+
+  // Tracks whether the level field currently holds a value we filled in from
+  // AI detection (vs one the officer typed) so the UI knows whether to show
+  // the "please verify" label and whether a later detection is still allowed
+  // to overwrite the field.
+  bool _isLevelAutoFilled = false;
+  bool _userEditedLevel = false;
+  double? _aiCalibratedSegmentationLevel;
+  bool _isSubmerged = false;
+  bool _isBlurryOrDark = false;
 
   double? get _parsedLevel => double.tryParse(_levelController.text.trim());
 
@@ -213,6 +224,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _capturedPhotoBytes = bytes;
         _stage = _CaptureStage.preview;
       });
+      unawaited(_checkImageQuality(photo.path));
       unawaited(_runAiDetection(photo.path));
       unawaited(_runSegmentation(photo.path));
     } catch (e) {
@@ -220,6 +232,24 @@ class _CaptureScreenState extends State<CaptureScreen> {
       setState(() {
         _errorMessage = 'Failed to capture photo: $e';
       });
+    }
+  }
+
+  Future<void> _checkImageQuality(String imagePath) async {
+    final result = await ImageQualityService().analyzeImage(imagePath);
+    if (!mounted) return;
+    setState(() {
+      _isBlurryOrDark = result.isBlurry || result.isDark;
+    });
+    if (_isBlurryOrDark) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '⚠️ Warning: Image appears blurry or too dark. Please consider retaking for an accurate reading.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 
@@ -275,6 +305,21 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _isDetectingWaterLine = false;
       _aiDetectedWaterLinePercent = result?.waterLinePercent;
+      if (result != null) {
+        final calibrated = widget.site.getCalibratedLevel(result.waterLinePercent);
+        _aiCalibratedSegmentationLevel = calibrated;
+
+        // If water reaches the top of the frame (waterLinePercent <= 5%) and OCR fails,
+        // flag the gauge post as submerged and default level to max calibrated point.
+        if (result.waterLinePercent <= 5.0 && _aiDetectedLevel == null) {
+          _isSubmerged = true;
+        }
+
+        if (_aiDetectedLevel == null && !_userEditedLevel) {
+          _levelController.text = _formatLevel(_isSubmerged ? (widget.site.maxGaugeHeight ?? widget.site.dangerLevel * 1.15) : calibrated);
+          _isLevelAutoFilled = true;
+        }
+      }
     });
   }
 
@@ -287,6 +332,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
       _aiDetectedLevel = null;
       _isDetectingWaterLine = false;
       _aiDetectedWaterLinePercent = null;
+      _isLevelAutoFilled = false;
+      _userEditedLevel = false;
+      _aiCalibratedSegmentationLevel = null;
+      _isSubmerged = false;
+      _isBlurryOrDark = false;
     });
   }
 
@@ -440,12 +490,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
           longitude: _userLongitude!,
           photoUrl: '',
           manualLevel: level,
-          aiDetectedLevel: _aiDetectedLevel,
+          aiDetectedLevel: _aiDetectedLevel ?? _aiCalibratedSegmentationLevel,
           status: 'pending',
           supervisorNote: null,
           isAlert: isAlert,
           phLevel: phLevel,
           waterQualityStatus: _waterQualityAssessment?.status,
+          isSubmerged: _isSubmerged,
+          isBlurryOrDark: _isBlurryOrDark,
         );
 
         await SyncService().saveReadingOffline(offlineReading, photo.path);
@@ -454,7 +506,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'No internet â€” reading saved locally, will sync automatically',
+              'No internet — reading saved locally, will sync automatically',
             ),
           ),
         );
@@ -501,12 +553,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
         longitude: _userLongitude!,
         photoUrl: photoUrl,
         manualLevel: level,
-        aiDetectedLevel: _aiDetectedLevel,
+        aiDetectedLevel: _aiDetectedLevel ?? _aiCalibratedSegmentationLevel,
         status: 'pending',
         supervisorNote: null,
         isAlert: isAlert,
         phLevel: phLevel,
         waterQualityStatus: _waterQualityAssessment?.status,
+        isSubmerged: _isSubmerged,
+        isBlurryOrDark: _isBlurryOrDark,
       );
 
       await readingRef.set(reading.toMap());
@@ -608,7 +662,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.site.name, style: textTheme.headlineLarge),
+            Text(
+              widget.site.name,
+              style: textTheme.headlineLarge?.copyWith(
+                color: const Color(0xFF000000),
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               widget.site.riverName,
@@ -640,7 +699,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.gaugePostReading, style: textTheme.headlineMedium),
+            Text(
+              l10n.gaugePostReading,
+              style: textTheme.headlineMedium?.copyWith(
+                color: const Color(0xFF000000),
+              ),
+            ),
             const SizedBox(height: 12),
             Text(l10n.waterLevelReading, style: textTheme.labelMedium),
             const SizedBox(height: 8),
@@ -670,6 +734,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
               decoration: InputDecoration(
                 hintText: l10n.enterLevelHint,
               ),
+              onChanged: (_) => setState(() {
+                _userEditedLevel = true;
+              }),
             ),
             if (kIsWeb) ...[
               const SizedBox(height: 8),
@@ -683,7 +750,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'AI-assisted reading detection isn\'t available on web â€” '
+                      'AI-assisted reading detection isn\'t available on web — '
                       'please enter the level manually.',
                       style: textTheme.labelSmall?.copyWith(
                         color: AppColors.onSurfaceVariant,
@@ -731,6 +798,64 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   ],
                 ),
               ],
+              if (_isLevelAutoFilled && !_userEditedLevel) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.auto_awesome,
+                      size: 14,
+                      color: AppColors.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Auto-filled by AI — please verify before submitting',
+                        style: textTheme.labelSmall?.copyWith(
+                          fontStyle: FontStyle.italic,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_aiDetectedLevel == null &&
+                    _aiDetectedWaterLinePercent != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Calibrated from image analysis — water line detected at '
+                    '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
+                    'frame height.',
+                    style: textTheme.labelSmall?.copyWith(
+                      color: AppColors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+              if (_isSubmerged) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.warning,
+                      size: 16,
+                      color: Colors.red,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Submerged Gauge Warning: Water level appears to be '
+                        'at or above the top of the gauge post! Severe flood risk.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
             const SizedBox(height: 12),
             Text(
@@ -764,7 +889,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.phStripReading, style: textTheme.headlineMedium),
+            Text(
+              l10n.phStripReading,
+              style: textTheme.headlineMedium?.copyWith(
+                color: const Color(0xFF000000),
+              ),
+            ),
             const SizedBox(height: 12),
             Text('pH Level (optional)', style: textTheme.labelMedium),
             const SizedBox(height: 8),
@@ -783,7 +913,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Low confidence â€” please verify manually',
+                        'Low confidence — please verify manually',
                         style: textTheme.labelSmall?.copyWith(
                           color: AppColors.error,
                           fontWeight: FontWeight.w600,
@@ -806,7 +936,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      "Couldn't read a pH strip in that photo â€” please "
+                      "Couldn't read a pH strip in that photo — please "
                       'enter the value manually.',
                       style: textTheme.labelSmall?.copyWith(
                         color: AppColors.onSurfaceVariant,
@@ -839,7 +969,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
               // strip scanning from a phone photo is inherently sensitive
               // to lighting and is not a lab-grade measurement.
               'Color-based strip scanning is approximate and affected by '
-              'lighting â€” not a lab-grade measurement. Leave blank if '
+              'lighting — not a lab-grade measurement. Leave blank if '
               'unavailable.',
               style: textTheme.labelSmall?.copyWith(
                 color: AppColors.onSurfaceVariant,
@@ -860,7 +990,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
             children: [
               CircularProgressIndicator(),
               SizedBox(height: 16),
-              Text('Checking your location...'),
+              Text(
+                'Checking your location...',
+                style: TextStyle(color: Color(0xFF1A1A1A)),
+              ),
             ],
           ),
         );
@@ -893,7 +1026,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF1A1A1A),
+              ),
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
@@ -996,7 +1131,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   // ClipRect â€” the same technique the camera plugin's own
                   // example app uses for a full-bleed preview.
                   final size = constraints.biggest;
-                  var scale = size.aspectRatio * controller.value.aspectRatio;
+                  var cameraAspectRatio = controller.value.aspectRatio;
+                  if (MediaQuery.of(context).orientation == Orientation.portrait) {
+                    cameraAspectRatio = 1 / cameraAspectRatio;
+                  }
+                  var scale = size.aspectRatio / cameraAspectRatio;
                   if (scale < 1) scale = 1 / scale;
 
                   return ClipRect(
@@ -1004,7 +1143,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       scale: scale,
                       child: Center(
                         child: AspectRatio(
-                          aspectRatio: controller.value.aspectRatio,
+                          aspectRatio: cameraAspectRatio,
                           child: CameraPreview(controller),
                         ),
                       ),
@@ -1208,7 +1347,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                     SizedBox(width: 12),
-                    Text('Saving reading...'),
+                    Text(
+                      'Saving reading...',
+                      style: TextStyle(color: Color(0xFF1A1A1A)),
+                    ),
                   ],
                 )
               : Column(
@@ -1298,17 +1440,28 @@ class _SiteWeatherCardState extends State<_SiteWeatherCard> {
                 ),
                 const SizedBox(height: 8),
                 if (latest == null)
-                  const Text('No weather data recorded yet â€” fetching...')
+                  const Text(
+                    'No weather data recorded yet — fetching...',
+                    style: TextStyle(color: Color(0xFF1A1A1A)),
+                  )
                 else ...[
                   Text(
                     'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
                     '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
                   ),
                   Text(
-                    'Temperature: ${latest.temperature.toStringAsFixed(1)}Â°C',
+                    'Temperature: ${latest.temperature.toStringAsFixed(1)}°C',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
                   ),
-                  Text('Humidity: ${latest.humidity.toStringAsFixed(0)}%'),
-                  Text('Conditions: ${latest.weatherDescription}'),
+                  Text(
+                    'Humidity: ${latest.humidity.toStringAsFixed(0)}%',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
+                  Text(
+                    'Conditions: ${latest.weatherDescription}',
+                    style: const TextStyle(color: Color(0xFF1A1A1A)),
+                  ),
                 ],
               ],
             );
@@ -1515,7 +1668,10 @@ class _PhResultCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             'AI Predicted pH: ${result.ph.toStringAsFixed(1)}',
-            style: const TextStyle(fontWeight: FontWeight.w600),
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1A1A1A),
+            ),
           ),
           const SizedBox(height: 2),
           Text(
@@ -1523,10 +1679,13 @@ class _PhResultCard extends StatelessWidget {
             style: TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 6),
-          Text(assessment.description, style: const TextStyle(fontSize: 12)),
+          Text(
+            assessment.description,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
+          ),
           const SizedBox(height: 4),
           Text(
-            'Color-based estimate from a strip photo â€” affected by '
+            'Color-based estimate from a strip photo — affected by '
             'lighting and not a lab-grade measurement.',
             style: TextStyle(
               fontSize: 10,
