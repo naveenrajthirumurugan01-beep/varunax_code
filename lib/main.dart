@@ -5,13 +5,40 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/theme.dart';
+import 'l10n/app_localizations.dart';
 import 'screens/analyst/analyst_dashboard_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/field/field_home_screen.dart';
 import 'screens/supervisor/supervisor_home_screen.dart';
 import 'services/notification_service.dart';
+
+const _localePrefsKey = 'app_locale';
+
+/// Holds the app's current display language. Read by [VarunaXApp] to drive
+/// `MaterialApp.locale`; updated (and persisted) via [setAppLocale] from the
+/// language selector on the login screen — a deliberately simple
+/// ValueNotifier rather than a full state-management dependency, since this
+/// is the only piece of cross-screen UI state the app needs.
+final ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('en'));
+
+/// Changes the app's display language immediately and remembers the choice
+/// for next launch.
+Future<void> setAppLocale(Locale locale) async {
+  localeNotifier.value = locale;
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_localePrefsKey, locale.languageCode);
+}
+
+Future<void> _restoreSavedLocale() async {
+  final prefs = await SharedPreferences.getInstance();
+  final savedCode = prefs.getString(_localePrefsKey);
+  if (savedCode != null) {
+    localeNotifier.value = Locale(savedCode);
+  }
+}
 
 const _desktopFirebaseOptions = FirebaseOptions(
   apiKey: 'AIzaSyCV1hBvl6Cb7XncUTgQE6S7Xx5vWw265L0',
@@ -28,6 +55,7 @@ bool get _isDesktopPlatform =>
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
+  await _restoreSavedLocale();
   if (kIsWeb) {
     await Firebase.initializeApp(options: _desktopFirebaseOptions);
   } else if (_isDesktopPlatform) {
@@ -48,15 +76,23 @@ class VarunaXApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Varuna X',
-      theme: AppTheme.lightTheme,
-      initialRoute: '/login',
-      routes: {
-        '/login': (context) => const LoginScreen(),
-        '/field': (context) => const FieldHomeScreen(),
-        '/supervisor': (context) => const SupervisorHomeScreen(),
-        '/analyst': (context) => const AnalystDashboardScreen(),
+    return ValueListenableBuilder<Locale>(
+      valueListenable: localeNotifier,
+      builder: (context, locale, _) {
+        return MaterialApp(
+          title: 'Varuna X',
+          theme: AppTheme.lightTheme,
+          locale: locale,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          initialRoute: '/login',
+          routes: {
+            '/login': (context) => const LoginScreen(),
+            '/field': (context) => const FieldHomeScreen(),
+            '/supervisor': (context) => const SupervisorHomeScreen(),
+            '/analyst': (context) => const AnalystDashboardScreen(),
+          },
+        );
       },
     );
   }

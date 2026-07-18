@@ -1,8 +1,9 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+﻿import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
 import '../../models/weather_reading_model.dart';
@@ -91,7 +92,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   // Compares this snapshot of active alerts against the previous one
   // (tracked via _seenAlertIds) and pops up a dialog for any reading that
   // wasn't there before. The very first snapshot just establishes the
-  // baseline — otherwise every pre-existing alert would trigger a popup the
+  // baseline â€” otherwise every pre-existing alert would trigger a popup the
   // moment this screen opens.
   void _handleAlertReadings(
     List<Reading> alertReadings,
@@ -117,9 +118,9 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
         await showDialog<void>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('⚠️ Water Level Alert'),
+            title: const Text('âš ï¸ Water Level Alert'),
             content: Text(
-              '⚠️ Water Level Alert — $siteName has exceeded its danger '
+              'âš ï¸ Water Level Alert â€” $siteName has exceeded its danger '
               'threshold',
             ),
             actions: [
@@ -149,7 +150,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           // Equality filter only (no orderBy on a second field), same
           // convention used elsewhere in this app to avoid requiring a
-          // composite Firestore index — sorted client-side below.
+          // composite Firestore index â€” sorted client-side below.
           stream: FirebaseFirestore.instance
               .collection('readings')
               .where('isAlert', isEqualTo: true)
@@ -179,7 +180,8 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                 // Scaffold now lives here, one level deeper than before, so
                 // the app bar's notification bell can reflect alertReadings
                 // (the same already-computed list the alert banner already
-                // used) — same queries throughout, just relocated.
+                // used) â€” same queries throughout, just relocated.
+                final l10n = AppLocalizations.of(context)!;
                 final Widget body;
                 if (readingsSnapshot.hasError) {
                   body = Center(
@@ -216,7 +218,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                   // Column can't shrink non-Expanded children to fit, so it
                   // overflowed at the bottom instead of scrolling. The
                   // reading list below is no longer its own Expanded/scrolling
-                  // region — it's shrink-wrapped into this single scroll view
+                  // region â€” it's shrink-wrapped into this single scroll view
                   // so nothing gets clipped regardless of content height.
                   body = SingleChildScrollView(
                     child: Column(
@@ -298,9 +300,9 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                       onPressed: () => _logout(context),
                     ),
                     titleSpacing: 0,
-                    title: const Text(
-                      'VARUNA X',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                    title: Text(
+                      l10n.appTitle,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     actions: [
                       Padding(
@@ -312,7 +314,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                     ],
                   ),
                   body: body,
-                  // Replaces the old top SegmentedButton — same _activeTab
+                  // Replaces the old top SegmentedButton â€” same _activeTab
                   // state, same setState call, just triggered from a bottom
                   // nav bar per the design instead of a top toggle.
                   bottomNavigationBar: BottomNavigationBar(
@@ -324,14 +326,14 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                           ? _DashboardTab.overview
                           : _DashboardTab.detailed;
                     }),
-                    items: const [
+                    items: [
                       BottomNavigationBarItem(
-                        icon: Icon(Icons.home),
-                        label: 'Home',
+                        icon: const Icon(Icons.home),
+                        label: l10n.home,
                       ),
                       BottomNavigationBarItem(
-                        icon: Icon(Icons.history),
-                        label: 'History',
+                        icon: const Icon(Icons.history),
+                        label: l10n.history,
                       ),
                     ],
                   ),
@@ -345,7 +347,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   }
 }
 
-/// Purely visual 24h/7d toggle — has no wiring to the chart below it, which
+/// Purely visual 24h/7d toggle â€” has no wiring to the chart below it, which
 /// always shows its existing fixed last-30-days window. Local widget state
 /// only, so tapping a pill just changes which one looks selected.
 class _RangeToggle extends StatefulWidget {
@@ -479,7 +481,7 @@ class _AlertBannerRow extends StatelessWidget {
     final siteName = site?.name ?? reading.siteId;
     final dangerLevel = site?.dangerLevel;
     final level = reading.manualLevel ?? reading.aiDetectedLevel;
-    final levelText = level != null ? '${level.toStringAsFixed(1)}m' : '—';
+    final levelText = level != null ? '${level.toStringAsFixed(1)}m' : 'â€”';
     final dangerText = dangerLevel != null
         ? '${dangerLevel.toStringAsFixed(1)}m'
         : 'unknown';
@@ -487,8 +489,8 @@ class _AlertBannerRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Text(
-        '⚠️ $siteName: $levelText recorded, exceeds danger level of '
-        '$dangerText — ${_timeAgo(reading.timestamp)}',
+        'âš ï¸ $siteName: $levelText recorded, exceeds danger level of '
+        '$dangerText â€” ${_timeAgo(reading.timestamp)}',
         style: TextStyle(color: Colors.red.shade900),
       ),
     );
@@ -506,7 +508,7 @@ class _StatsRow extends StatelessWidget {
     final now = DateTime.now();
     // "Approved Today" combines the two filter predicates already used
     // individually elsewhere on this dashboard (today's date, approved
-    // status) — no new query, just their intersection over the same
+    // status) â€” no new query, just their intersection over the same
     // already-fetched readings list.
     final approvedTodayCount = readings
         .where(
@@ -766,7 +768,7 @@ class _ReadingCard extends StatelessWidget {
               Expanded(
                 flex: 2,
                 child: Text(
-                  level != null ? '${level.toStringAsFixed(1)}m' : '—',
+                  level != null ? '${level.toStringAsFixed(1)}m' : 'â€”',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -818,7 +820,7 @@ class _ReadingDetailDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // isAlert is already on the Reading itself (no new data) — a reading
+    // isAlert is already on the Reading itself (no new data) â€” a reading
     // that triggered a danger-level alert is called out as "Critical" here
     // rather than showing its ordinary pending/approved/rejected status.
     final isCritical = reading.isAlert;
@@ -938,7 +940,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                         label: 'Recorded Level',
                         value: level != null
                             ? '${level.toStringAsFixed(1)}m'
-                            : '—',
+                            : 'â€”',
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -947,7 +949,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                         label: 'Threshold',
                         value: site != null
                             ? '${site!.dangerLevel.toStringAsFixed(1)}m'
-                            : '—',
+                            : 'â€”',
                       ),
                     ),
                   ],
@@ -975,9 +977,36 @@ class _ReadingDetailDialog extends StatelessWidget {
                     value: '${reading.aiDetectedLevel}',
                   ),
                 if (reading.phLevel != null)
-                  _DetailRow(
-                    label: 'pH',
-                    value: reading.phLevel!.toStringAsFixed(1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(
+                          width: 120,
+                          child: Text(
+                            'pH',
+                            style: TextStyle(
+                              color: AppColors.onSurfaceVariant,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: Row(
+                            children: [
+                              Text(reading.phLevel!.toStringAsFixed(1)),
+                              if (reading.waterQualityStatus != null) ...[
+                                const SizedBox(width: 8),
+                                _WaterQualityBadge(
+                                  status: reading.waterQualityStatus!,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 if (reading.supervisorNote != null &&
                     reading.supervisorNote!.isNotEmpty)
@@ -992,7 +1021,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: Colors.grey,
+                      color: AppColors.onSurfaceVariant,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -1072,7 +1101,7 @@ class _DetailRow extends StatelessWidget {
             child: Text(
               label,
               style: const TextStyle(
-                color: Colors.grey,
+                color: AppColors.onSurfaceVariant,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -1084,8 +1113,64 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
+/// Small colored pill showing a reading's water-quality classification
+/// (from PhDetectionService.classifyWaterQuality, stored on the reading as
+/// Reading.waterQualityStatus) alongside its pH value.
+class _WaterQualityBadge extends StatelessWidget {
+  const _WaterQualityBadge({required this.status});
+
+  final String status;
+
+  Color get _color {
+    switch (status) {
+      case 'Safe':
+        return Colors.green;
+      case 'Caution':
+        return Colors.orange;
+      default:
+        return Colors.red;
+    }
+  }
+
+  // Maps the underlying status data value ('Safe'/'Caution'/'Unsafe', also
+  // used for the color above and stored as-is on Reading.waterQualityStatus)
+  // to its localized display text â€” display-only.
+  String _localizedStatus(AppLocalizations l10n) {
+    switch (status) {
+      case 'Safe':
+        return l10n.safe;
+      case 'Caution':
+        return l10n.caution;
+      default:
+        return l10n.unsafe;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _color;
+    final l10n = AppLocalizations.of(context)!;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        border: Border.all(color: color),
+      ),
+      child: Text(
+        _localizedStatus(l10n),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+        ),
+      ),
+    );
+  }
+}
+
 /// New charts section: a per-site trend line (with a danger-level reference
-/// line) plus an all-sites reading-status bar chart. Purely additive — the
+/// line) plus an all-sites reading-status bar chart. Purely additive â€” the
 /// stat cards, filters, and reading list above/below are untouched.
 class _TrendChartsSection extends StatefulWidget {
   const _TrendChartsSection({required this.sites, required this.allReadings});
@@ -1136,7 +1221,7 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
                               ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                       ),
-                      // Purely decorative — this dashboard has no existing
+                      // Purely decorative â€” this dashboard has no existing
                       // time-range control to restyle, and the underlying
                       // chart always shows the last 30 days regardless of
                       // which pill looks selected. No new filtering logic.
@@ -1146,7 +1231,7 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
                   const SizedBox(height: 8),
                   const Text(
                     'Site',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
                   ),
                   DropdownButton<String>(
                     value: selectedSiteId,
@@ -1179,15 +1264,15 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
           ),
           const SizedBox(height: 16),
           const Text(
-            'Water Level — all sites (latest reading)',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
+            'Water Level â€” all sites (latest reading)',
+            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
           _AllSitesLevelChart(sites: widget.sites, allReadings: widget.allReadings),
           const SizedBox(height: 16),
           const Text(
-            'Reading Status — all sites',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
+            'Reading Status â€” all sites',
+            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
           _StatusBarChart(readings: widget.allReadings),
@@ -1195,8 +1280,8 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
           _StatusPieChart(readings: widget.allReadings),
           const SizedBox(height: 16),
           const Text(
-            'Submission Activity — last 30 days',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
+            'Submission Activity â€” last 30 days',
+            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
           _SubmissionHeatmap(readings: widget.allReadings),
@@ -1220,7 +1305,7 @@ class _SiteTrendLineChart extends StatelessWidget {
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       // Filtered by siteId only (no orderBy on a second field) so this
-      // doesn't require a composite Firestore index — sorting/windowing by
+      // doesn't require a composite Firestore index â€” sorting/windowing by
       // timestamp happens client-side below, same convention the rest of
       // this screen already uses for status/site filtering.
       stream: FirebaseFirestore.instance
@@ -1380,7 +1465,12 @@ class _SiteTrendLineChart extends StatelessWidget {
 
 /// Shows the most recent OpenWeatherMap reading recorded for the selected
 /// site (from the `weather_data` collection), with a manual refresh button
-/// that fetches a fresh reading on demand via [WeatherService].
+/// that fetches a fresh reading on demand via [WeatherService]. Also
+/// auto-triggers one fetch when a site has no weather data at all yet (same
+/// fallback capture_screen.dart's _SiteWeatherCard already has) â€” without
+/// this, any site that was never used in the field-capture flow would show
+/// "No weather data recorded yet." indefinitely unless someone remembers to
+/// tap the refresh icon.
 class _WeatherSection extends StatefulWidget {
   const _WeatherSection({super.key, required this.site});
 
@@ -1393,6 +1483,7 @@ class _WeatherSection extends StatefulWidget {
 class _WeatherSectionState extends State<_WeatherSection> {
   final _weatherService = WeatherService();
   bool _isRefreshing = false;
+  bool _hasTriggeredFetch = false;
 
   Future<void> _refresh() async {
     setState(() => _isRefreshing = true);
@@ -1413,7 +1504,7 @@ class _WeatherSectionState extends State<_WeatherSection> {
         child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           // Equality filter only (no orderBy on a second field), same
           // convention used elsewhere in this app to avoid requiring a
-          // composite Firestore index — sorted client-side below to find
+          // composite Firestore index â€” sorted client-side below to find
           // the most recent entry.
           stream: FirebaseFirestore.instance
               .collection('weather_data')
@@ -1426,6 +1517,16 @@ class _WeatherSectionState extends State<_WeatherSection> {
                   ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
             final latest = readings.isNotEmpty ? readings.first : null;
 
+            if (latest == null &&
+                !_hasTriggeredFetch &&
+                !_isRefreshing &&
+                snapshot.connectionState != ConnectionState.waiting) {
+              _hasTriggeredFetch = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _refresh();
+              });
+            }
+
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1437,7 +1538,7 @@ class _WeatherSectionState extends State<_WeatherSection> {
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: Colors.grey,
+                          color: AppColors.onSurfaceVariant,
                         ),
                       ),
                     ),
@@ -1464,13 +1565,13 @@ class _WeatherSectionState extends State<_WeatherSection> {
                     'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
                     '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
                   ),
-                  Text('Temperature: ${latest.temperature.toStringAsFixed(1)}°C'),
+                  Text('Temperature: ${latest.temperature.toStringAsFixed(1)}Â°C'),
                   Text('Humidity: ${latest.humidity.toStringAsFixed(0)}%'),
                   Text('Conditions: ${latest.weatherDescription}'),
                   const SizedBox(height: 4),
                   Text(
                     'As of ${_formatTimestamp(latest.timestamp)}',
-                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    style: const TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant),
                   ),
                 ],
               ],
@@ -1482,7 +1583,7 @@ class _WeatherSectionState extends State<_WeatherSection> {
   }
 }
 
-/// Bar chart of reading counts by status across all sites — a quick
+/// Bar chart of reading counts by status across all sites â€” a quick
 /// health-of-data-pipeline view. Fed from the same top-100 readings stream
 /// that already powers the stat cards above, so it updates live too.
 class _StatusBarChart extends StatelessWidget {
@@ -1585,7 +1686,7 @@ class _StatusBarChart extends StatelessWidget {
 }
 
 /// Pie chart showing the proportion of readings by status across all
-/// sites — the same approved/pending/rejected counts as [_StatusBarChart],
+/// sites â€” the same approved/pending/rejected counts as [_StatusBarChart],
 /// just a different view of them.
 class _StatusPieChart extends StatelessWidget {
   const _StatusPieChart({required this.readings});
@@ -1825,7 +1926,7 @@ class _AllSitesLevelChart extends StatelessWidget {
 }
 
 /// Calendar-heatmap-style view of reading submission activity over the last
-/// 30 days — one square per day, darker for more readings that day. Fed
+/// 30 days â€” one square per day, darker for more readings that day. Fed
 /// from the same top-100 readings stream as the rest of this dashboard, so
 /// very high-volume days beyond that cap may under-count.
 class _SubmissionHeatmap extends StatelessWidget {

@@ -5,6 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
 import '../../services/sync_service.dart';
 import 'history_screen.dart';
@@ -51,6 +52,7 @@ class _FieldHomeScreenState extends State<FieldHomeScreen> {
   @override
   Widget build(BuildContext context) {
     final user = AuthService().currentUser;
+    final l10n = AppLocalizations.of(context)!;
 
     return Scaffold(
       appBar: AppBar(
@@ -82,12 +84,12 @@ class _FieldHomeScreenState extends State<FieldHomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'VARUNA X',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                Text(
+                  l10n.appTitle,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Text(
-                  'Welcome, $displayName',
+                  '${l10n.welcomeMessage}, $displayName',
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.normal,
@@ -109,11 +111,14 @@ class _FieldHomeScreenState extends State<FieldHomeScreen> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedTab,
         onTap: (index) => setState(() => _selectedTab = index),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
+        items: [
           BottomNavigationBarItem(
-            icon: Icon(Icons.history),
-            label: 'History',
+            icon: const Icon(Icons.home),
+            label: l10n.home,
+          ),
+          BottomNavigationBarItem(
+            icon: const Icon(Icons.history),
+            label: l10n.history,
           ),
         ],
       ),
@@ -127,6 +132,7 @@ class _FieldHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = AuthService().currentUser;
+    final l10n = AppLocalizations.of(context)!;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -192,7 +198,7 @@ class _FieldHome extends StatelessWidget {
                   );
                 },
                 icon: const Icon(Icons.location_on),
-                label: const Text('Submit Reading'),
+                label: Text(l10n.submitReading),
                 style: ElevatedButton.styleFrom(
                   minimumSize: const Size(240, 56),
                   textStyle: const TextStyle(

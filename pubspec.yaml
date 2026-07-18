@@ -53,6 +53,9 @@ dependencies:
   flutter_local_notifications: ^22.0.1
   googleapis_auth: ^1.6.0
   google_fonts: ^6.2.1
+  flutter_localizations:
+    sdk: flutter
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -70,6 +73,9 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+
+  # Generates AppLocalizations from lib/l10n/*.arb per l10n.yaml.
+  generate: true
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

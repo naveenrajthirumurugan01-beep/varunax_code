@@ -76,6 +76,7 @@ class SyncService {
           supervisorNote: pendingReading.supervisorNote,
           isAlert: pendingReading.isAlert,
           phLevel: pendingReading.phLevel,
+          waterQualityStatus: pendingReading.waterQualityStatus,
         );
 
         await FirebaseFirestore.instance

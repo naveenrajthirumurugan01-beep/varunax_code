@@ -12,6 +12,7 @@ class Reading {
   final String? supervisorNote;
   final bool isAlert;
   final double? phLevel;
+  final String? waterQualityStatus;
 
   Reading({
     required this.readingId,
@@ -27,6 +28,7 @@ class Reading {
     this.supervisorNote,
     this.isAlert = false,
     this.phLevel,
+    this.waterQualityStatus,
   });
 
   factory Reading.fromMap(Map<String, dynamic> map) {
@@ -46,6 +48,7 @@ class Reading {
       supervisorNote: map['supervisorNote'] as String?,
       isAlert: map['isAlert'] as bool? ?? false,
       phLevel: (map['phLevel'] as num?)?.toDouble(),
+      waterQualityStatus: map['waterQualityStatus'] as String?,
     );
   }
 
@@ -64,6 +67,7 @@ class Reading {
       'supervisorNote': supervisorNote,
       'isAlert': isAlert,
       'phLevel': phLevel,
+      'waterQualityStatus': waterQualityStatus,
     };
   }
 }

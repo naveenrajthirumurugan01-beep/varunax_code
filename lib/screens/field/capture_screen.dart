@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../core/theme.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
 import '../../models/weather_reading_model.dart';
@@ -17,10 +18,12 @@ import '../../services/ai_detection_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cloudinary_service.dart';
 import '../../services/location_service.dart';
+import '../../services/ph_detection_service.dart';
 import '../../services/push_sender_service.dart';
 import '../../services/segmentation_service.dart';
 import '../../services/sync_service.dart';
 import '../../services/weather_service.dart';
+import 'submission_result_screen.dart';
 
 enum _CaptureStage {
   checkingLocation,
@@ -28,6 +31,7 @@ enum _CaptureStage {
   insideGeofence,
   camera,
   preview,
+  scanningPhStrip,
 }
 
 class CaptureScreen extends StatefulWidget {
@@ -64,16 +68,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
   bool _isDetectingWaterLine = false;
   double? _aiDetectedWaterLinePercent;
 
-  // Tracks whether the level field currently holds a value we filled in from
-  // AI detection (vs one the officer typed) so the UI knows whether to show
-  // the "please verify" label and whether a later detection is still allowed
-  // to overwrite the field.
-  bool _isLevelAutoFilled = false;
-  bool _userEditedLevel = false;
-
   double? get _parsedLevel => double.tryParse(_levelController.text.trim());
 
-  // Optional — a missing or unparsable pH reading never blocks submission,
+  // Optional â€” a missing or unparsable pH reading never blocks submission,
   // unlike the water level field above.
   double? get _parsedPhLevel {
     final text = _phLevelController.text.trim();
@@ -87,6 +84,26 @@ class _CaptureScreenState extends State<CaptureScreen> {
       _userLatitude != null &&
       _userLongitude != null;
 
+  // ---- pH strip scanning state ----
+  //
+  // A separate, self-contained camera session from the main gauge-photo
+  // flow above â€” entered/exited via its own methods, never touching
+  // _cameraController/_cameraInitFuture or the .camera/.preview stages.
+
+  // Centered 50% square of the full captured image, as fractions of its
+  // width/height â€” a deliberately generous approximation of whatever's
+  // under the on-screen guide box (see _buildPhStripCamera's comment on why
+  // that preview isn't cropped/scaled, which keeps this mapping honest).
+  static const _phSampleRegion = Rect.fromLTRB(0.25, 0.25, 0.75, 0.75);
+
+  CameraController? _phCameraController;
+  Future<void>? _phCameraInitFuture;
+  _CaptureStage? _stageBeforePhScan;
+  bool _isDetectingPh = false;
+  bool _hasAttemptedPhScan = false;
+  PhDetectionResult? _phDetectionResult;
+  WaterQualityAssessment? _waterQualityAssessment;
+
   @override
   void initState() {
     super.initState();
@@ -96,6 +113,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   @override
   void dispose() {
     _cameraController?.dispose();
+    _phCameraController?.dispose();
     _levelController.dispose();
     _phLevelController.dispose();
     _aiDetectionService.dispose();
@@ -208,12 +226,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
   // ---- AI-assisted gauge reading detection ----
   //
   // Runs on-device OCR in the background right after a photo is taken. This
-  // is only ever a suggestion for the officer to verify — never trusted or
+  // is only ever a suggestion for the officer to verify â€” never trusted or
   // submitted on its own.
 
   Future<void> _runAiDetection(String imagePath) async {
     // google_mlkit_text_recognition has no web implementation, so skip
-    // detection entirely on web rather than let it fail — the water level
+    // detection entirely on web rather than let it fail â€” the water level
     // card shows a message and the officer just enters the level manually.
     if (kIsWeb) return;
 
@@ -227,14 +245,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _isDetectingLevel = false;
       _aiDetectedLevel = detected;
-      // OCR is the more reliable signal, so it always wins over the
-      // segmentation estimate below (even if segmentation already auto-filled
-      // the field first) — but never clobber a value the officer typed in
-      // themselves while detection was still running.
-      if (detected != null && !_userEditedLevel) {
-        _levelController.text = _formatLevel(detected);
-        _isLevelAutoFilled = true;
-      }
     });
   }
 
@@ -265,13 +275,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _isDetectingWaterLine = false;
       _aiDetectedWaterLinePercent = result?.waterLinePercent;
-      // Only fall back to the segmentation estimate when OCR hasn't already
-      // produced a value (OCR takes priority whenever it's available) and
-      // the officer hasn't already typed something in themselves.
-      if (result != null && _aiDetectedLevel == null && !_userEditedLevel) {
-        _levelController.text = _formatLevel(result.waterLinePercent);
-        _isLevelAutoFilled = true;
-      }
     });
   }
 
@@ -284,9 +287,100 @@ class _CaptureScreenState extends State<CaptureScreen> {
       _aiDetectedLevel = null;
       _isDetectingWaterLine = false;
       _aiDetectedWaterLinePercent = null;
-      _isLevelAutoFilled = false;
-      _userEditedLevel = false;
     });
+  }
+
+  // ---- pH strip scanning ----
+  //
+  // Mirrors _openCamera/_takePicture's structure, but is entirely
+  // self-contained: its own controller, its own stage, and it always
+  // returns to whichever stage the officer was on before opening it.
+
+  Future<void> _openPhStripCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        setState(() {
+          _errorMessage = 'No camera available on this device.';
+        });
+        return;
+      }
+
+      final backCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      final controller = CameraController(
+        backCamera,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+
+      setState(() {
+        _stageBeforePhScan = _stage;
+        _phCameraController = controller;
+        _phCameraInitFuture = controller.initialize();
+        _stage = _CaptureStage.scanningPhStrip;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Could not open camera: $e';
+      });
+    }
+  }
+
+  Future<void> _capturePhStripPhoto() async {
+    final controller = _phCameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+
+    setState(() {
+      _isDetectingPh = true;
+    });
+
+    PhDetectionResult? result;
+    try {
+      final photo = await controller.takePicture();
+      result = await PhDetectionService().detectPh(
+        photo.path,
+        _phSampleRegion,
+      );
+    } catch (_) {
+      // Detection failures are already handled inside PhDetectionService
+      // (it returns null) â€” this only guards the capture step itself
+      // (e.g. the camera erroring mid-shot).
+      result = null;
+    }
+
+    if (!mounted) return;
+
+    final assessment = result != null
+        ? PhDetectionService().classifyWaterQuality(result.ph)
+        : null;
+    final previousStage = _stageBeforePhScan ?? _CaptureStage.insideGeofence;
+
+    setState(() {
+      _isDetectingPh = false;
+      _hasAttemptedPhScan = true;
+      _phDetectionResult = result;
+      _waterQualityAssessment = assessment;
+      _stage = previousStage;
+      _phCameraController = null;
+      _phCameraInitFuture = null;
+    });
+
+    await controller.dispose();
+  }
+
+  void _cancelPhStripScan() {
+    final controller = _phCameraController;
+    final previousStage = _stageBeforePhScan ?? _CaptureStage.insideGeofence;
+    setState(() {
+      _stage = previousStage;
+      _phCameraController = null;
+      _phCameraInitFuture = null;
+    });
+    controller?.dispose();
   }
 
   // ---- Save / offline sync logic (unchanged, now also carries manualLevel) ----
@@ -308,12 +402,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
     // level (manualLevel) is guaranteed non-null by the early return above,
     // so there's no case here where falling back to the AI-detected value is
-    // reachable — dart's null-safety already proves that invariant.
+    // reachable â€” dart's null-safety already proves that invariant.
     final isAlert = level >= widget.site.dangerLevel;
 
     // Fire-and-forget: accumulates a paired rainfall/water-level dataset for
     // a future flood prediction model, but must never block or fail the
-    // reading submission itself — recordWeatherForSite already swallows its
+    // reading submission itself â€” recordWeatherForSite already swallows its
     // own errors (no connectivity, API failure, etc).
     unawaited(
       WeatherService().recordWeatherForSite(
@@ -324,7 +418,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
     );
 
     // Everything from the connectivity check onward is now inside one
-    // try/catch — previously the connectivity check and the offline-save
+    // try/catch â€” previously the connectivity check and the offline-save
     // branch sat outside it, so an error there (e.g. a web-incompatible
     // file-path read) went uncaught: _isSaving stayed true forever with no
     // SnackBar and no navigation, making the button look like it did nothing.
@@ -351,6 +445,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
           supervisorNote: null,
           isAlert: isAlert,
           phLevel: phLevel,
+          waterQualityStatus: _waterQualityAssessment?.status,
         );
 
         await SyncService().saveReadingOffline(offlineReading, photo.path);
@@ -359,11 +454,22 @@ class _CaptureScreenState extends State<CaptureScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'No internet — reading saved locally, will sync automatically',
+              'No internet â€” reading saved locally, will sync automatically',
             ),
           ),
         );
-        Navigator.of(context).pop();
+        // No already-fetched WeatherReading exists in this scope â€” weather
+        // here is only ever fire-and-forget written to Firestore, never
+        // read back â€” so weather is omitted rather than triggering a new
+        // fetch, same as generateReadingSummary's other call sites.
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => SubmissionResultScreen(
+              reading: offlineReading,
+              site: widget.site,
+            ),
+          ),
+        );
         return;
       }
 
@@ -400,6 +506,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         supervisorNote: null,
         isAlert: isAlert,
         phLevel: phLevel,
+        waterQualityStatus: _waterQualityAssessment?.status,
       );
 
       await readingRef.set(reading.toMap());
@@ -420,7 +527,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Reading saved successfully')),
       );
-      Navigator.of(context).pop();
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => SubmissionResultScreen(
+            reading: reading,
+            site: widget.site,
+          ),
+        ),
+      );
     } catch (e, stackTrace) {
       debugPrint('Failed to save reading: $e\n$stackTrace');
       if (!mounted) return;
@@ -439,7 +553,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // Same pop the default back arrow already performed — just made
+        // Same pop the default back arrow already performed â€” just made
         // explicit as a close icon per the design's top bar.
         leading: IconButton(
           icon: const Icon(Icons.close),
@@ -460,6 +574,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
         return _buildCameraPreview();
       case _CaptureStage.preview:
         return _buildPhotoPreview();
+      case _CaptureStage.scanningPhStrip:
+        return _buildPhStripCamera();
       case _CaptureStage.checkingLocation:
       case _CaptureStage.outsideGeofence:
       case _CaptureStage.insideGeofence:
@@ -475,9 +591,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
         children: [
           _buildSiteInfoCard(),
           const SizedBox(height: 12),
-          _buildWaterLevelCard(),
+          _buildGaugeSection(),
           const SizedBox(height: 12),
-          _buildGeofenceSection(),
+          _buildPhSection(),
         ],
       ),
     );
@@ -506,8 +622,17 @@ class _CaptureScreenState extends State<CaptureScreen> {
     );
   }
 
-  Widget _buildWaterLevelCard() {
+  // ---- Section 1: Gauge Post Reading ----
+  //
+  // Camera capture (via _buildGeofenceSection, which shows the "Open Camera"
+  // trigger once the officer is inside the geofence), the manual water-level
+  // field, and the AI OCR/segmentation results â€” shown as a separate
+  // read-only chip above the field rather than pre-filled into it, so the
+  // officer always types their own reading while seeing the AI's suggestion
+  // alongside it.
+  Widget _buildGaugeSection() {
     final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context)!;
 
     return Card(
       child: Padding(
@@ -515,19 +640,36 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Water Level (m)', style: textTheme.labelMedium),
+            Text(l10n.gaugePostReading, style: textTheme.headlineMedium),
+            const SizedBox(height: 12),
+            Text(l10n.waterLevelReading, style: textTheme.labelMedium),
             const SizedBox(height: 8),
+            if (_aiDetectedLevel != null) ...[
+              _AiPredictionChip(
+                label: 'AI Predicted: ${_formatLevel(_aiDetectedLevel!)}m',
+              ),
+              const SizedBox(height: 8),
+            ] else if (_aiDetectedWaterLinePercent != null) ...[
+              // Segmentation only reports where the water line falls within
+              // the frame, not a calibrated meters value, so that's spelled
+              // out here rather than letting the officer think it's a real
+              // gauge reading.
+              _AiPredictionChip(
+                label:
+                    'AI Estimated: water line at '
+                    '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
+                    'frame height (not a calibrated reading)',
+              ),
+              const SizedBox(height: 8),
+            ],
             TextField(
               controller: _levelController,
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
-              decoration: const InputDecoration(
-                hintText: 'Enter level in meters',
+              decoration: InputDecoration(
+                hintText: l10n.enterLevelHint,
               ),
-              onChanged: (_) => setState(() {
-                _userEditedLevel = true;
-              }),
             ),
             if (kIsWeb) ...[
               const SizedBox(height: 8),
@@ -541,7 +683,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'AI-assisted reading detection isn\'t available on web — '
+                      'AI-assisted reading detection isn\'t available on web â€” '
                       'please enter the level manually.',
                       style: textTheme.labelSmall?.copyWith(
                         color: AppColors.onSurfaceVariant,
@@ -589,49 +731,92 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   ],
                 ),
               ],
-              if (_isLevelAutoFilled && !_userEditedLevel) ...[
+            ],
+            const SizedBox(height: 12),
+            Text(
+              '${l10n.dangerLevel}: ${widget.site.dangerLevel} m',
+              style: TextStyle(
+                color: AppColors.error,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildGeofenceSection(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---- Section 2: pH Strip Reading ----
+  //
+  // pH strip camera capture, the manual pH field, and the water-quality
+  // classification. Same AI-vs-manual pattern as the gauge section above:
+  // _PhResultCard already shows the AI-detected pH as a distinct read-only
+  // card above the field, so the field itself is never pre-filled.
+  Widget _buildPhSection() {
+    final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context)!;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l10n.phStripReading, style: textTheme.headlineMedium),
+            const SizedBox(height: 12),
+            Text('pH Level (optional)', style: textTheme.labelMedium),
+            const SizedBox(height: 8),
+            if (_phDetectionResult != null &&
+                _waterQualityAssessment != null) ...[
+              _PhResultCard(
+                result: _phDetectionResult!,
+                assessment: _waterQualityAssessment!,
+              ),
+              if (_phDetectionResult!.confidence < 50) ...[
                 const SizedBox(height: 8),
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(
-                      Icons.auto_awesome,
-                      size: 14,
-                      color: AppColors.primary,
-                    ),
+                    Icon(Icons.error_outline, size: 14, color: AppColors.error),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'AI suggested — please verify before submitting',
+                        'Low confidence â€” please verify manually',
                         style: textTheme.labelSmall?.copyWith(
-                          fontStyle: FontStyle.italic,
-                          color: AppColors.primary,
+                          color: AppColors.error,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
                   ],
                 ),
-                // Segmentation only reports where the water line falls within
-                // the frame, not a calibrated meters value, so when it's the
-                // one that filled the field (OCR didn't produce a value),
-                // spell that out rather than letting the officer think it's
-                // a real gauge reading.
-                if (_aiDetectedLevel == null &&
-                    _aiDetectedWaterLinePercent != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Estimated from image analysis — water line detected at '
-                    '${_aiDetectedWaterLinePercent!.toStringAsFixed(0)}% of '
-                    'frame height, not a calibrated gauge reading.',
-                    style: textTheme.labelSmall?.copyWith(
-                      color: AppColors.primary.withValues(alpha: 0.7),
+              ],
+              const SizedBox(height: 8),
+            ] else if (_hasAttemptedPhScan) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 14,
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      "Couldn't read a pH strip in that photo â€” please "
+                      'enter the value manually.',
+                      style: textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ],
-              ],
+              ),
+              const SizedBox(height: 8),
             ],
-            const SizedBox(height: 16),
-            Text('pH Level (optional)', style: textTheme.labelMedium),
-            const SizedBox(height: 8),
             TextField(
               controller: _phLevelController,
               keyboardType: const TextInputType.numberWithOptions(
@@ -639,19 +824,25 @@ class _CaptureScreenState extends State<CaptureScreen> {
               ),
               decoration: const InputDecoration(hintText: 'e.g. 7.2'),
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Leave blank if pH meter unavailable',
-              style: textTheme.labelSmall?.copyWith(
-                color: AppColors.onSurfaceVariant,
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _isDetectingPh ? null : _openPhStripCamera,
+              icon: const Icon(Icons.camera_alt_outlined),
+              label: Text(
+                _hasAttemptedPhScan ? 'Re-scan pH Strip' : 'Scan pH Strip',
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 4),
             Text(
-              'Danger Level: ${widget.site.dangerLevel} m',
-              style: TextStyle(
-                color: AppColors.error,
-                fontWeight: FontWeight.bold,
+              // Honesty about the limits of this feature, right where the
+              // officer is looking, not just in code comments â€” color-based
+              // strip scanning from a phone photo is inherently sensitive
+              // to lighting and is not a lab-grade measurement.
+              'Color-based strip scanning is approximate and affected by '
+              'lighting â€” not a lab-grade measurement. Leave blank if '
+              'unavailable.',
+              style: textTheme.labelSmall?.copyWith(
+                color: AppColors.onSurfaceVariant,
               ),
             ),
           ],
@@ -674,12 +865,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
           ),
         );
       case _CaptureStage.outsideGeofence:
-        // Geofence check failed — block everything below this point.
+        // Geofence check failed â€” block everything below this point.
         return _buildOutsideGeofence();
       case _CaptureStage.insideGeofence:
         return _buildInsideGeofence();
       case _CaptureStage.camera:
       case _CaptureStage.preview:
+      case _CaptureStage.scanningPhStrip:
         return const SizedBox.shrink();
     }
   }
@@ -716,6 +908,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   Widget _buildInsideGeofence() {
+    final l10n = AppLocalizations.of(context)!;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -733,7 +927,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                 Icon(Icons.check_circle, color: Colors.green.shade700, size: 18),
                 const SizedBox(width: 6),
                 Text(
-                  'Within geofence range',
+                  l10n.withinGeofence,
                   style: TextStyle(
                     color: Colors.green.shade700,
                     fontWeight: FontWeight.w600,
@@ -787,19 +981,19 @@ class _CaptureScreenState extends State<CaptureScreen> {
             Positioned.fill(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  // CameraPreview has no built-in "cover" mode — it only
+                  // CameraPreview has no built-in "cover" mode â€” it only
                   // ever letterboxes to controller.value.aspectRatio (unlike
                   // MobileScanner on the QR screen, which crops to fill on
                   // its own). Earlier attempts here tried to force a "cover"
                   // shape by handing CameraPreview a pre-computed pixel-size
                   // SizedBox, but that gives it *tight* constraints, leaving
                   // its own internal orientation-correcting AspectRatio no
-                  // room to act — so it rendered at whatever (wrong) shape
+                  // room to act â€” so it rendered at whatever (wrong) shape
                   // was guessed. This instead lets AspectRatio size the
                   // preview at its own correct, natural size first, then
                   // uniformly scales that correct box up with Transform.scale
                   // until it covers the screen, clipping the overscan with
-                  // ClipRect — the same technique the camera plugin's own
+                  // ClipRect â€” the same technique the camera plugin's own
                   // example app uses for a full-bleed preview.
                   final size = constraints.biggest;
                   var scale = size.aspectRatio * controller.value.aspectRatio;
@@ -819,9 +1013,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
                 },
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 32),
-              child: _buildShutterButton(),
+            Positioned(
+              bottom: 32,
+              left: 0,
+              right: 0,
+              child: Center(child: _buildShutterButton()),
             ),
           ],
         );
@@ -852,7 +1048,122 @@ class _CaptureScreenState extends State<CaptureScreen> {
     );
   }
 
+  Widget _buildPhStripCamera() {
+    final controller = _phCameraController;
+    final initFuture = _phCameraInitFuture;
+    if (controller == null || initFuture == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return FutureBuilder<void>(
+      future: initFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return Center(child: Text('Camera error: ${snapshot.error}'));
+        }
+
+        // Deliberately not the cover-crop/Transform.scale treatment
+        // _buildCameraPreview uses for the main gauge photo â€” this stays a
+        // simple letterboxed AspectRatio so the visible frame maps
+        // directly onto the full captured image, keeping _phSampleRegion's
+        // fractional coordinates an honest match for what's on screen.
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black,
+                child: Center(
+                  child: AspectRatio(
+                    aspectRatio: controller.value.aspectRatio,
+                    child: CameraPreview(controller),
+                  ),
+                ),
+              ),
+            ),
+            const _PhGuideBox(),
+            Positioned(
+              top: 24,
+              left: 48,
+              right: 48,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(
+                      AppSpacing.radiusPill,
+                    ),
+                  ),
+                  child: const Text(
+                    'Align strip within frame',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                tooltip: 'Cancel',
+                onPressed: _isDetectingPh ? null : _cancelPhStripScan,
+              ),
+            ),
+            Positioned(
+              bottom: 32,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _isDetectingPh
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : _buildPhShutterButton(),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildPhShutterButton() {
+    return Material(
+      color: Colors.transparent,
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: _capturePhStripPhoto,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: 76,
+          height: 76,
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 4),
+          ),
+          child: const DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPhotoPreview() {
+    final l10n = AppLocalizations.of(context)!;
     final photo = _capturedPhoto;
     if (photo == null) {
       return const Center(child: Text('No photo captured.'));
@@ -881,7 +1192,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
         children: [
           SizedBox(height: 350, child: photoPreview),
           const SizedBox(height: 12),
-          _buildWaterLevelCard(),
+          _buildGaugeSection(),
+          const SizedBox(height: 12),
+          _buildPhSection(),
           const SizedBox(height: 12),
           _SiteWeatherCard(site: widget.site),
           const SizedBox(height: 16),
@@ -903,13 +1216,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   children: [
                     OutlinedButton(
                       onPressed: _retake,
-                      child: const Text('Retake'),
+                      child: Text(l10n.retake),
                     ),
                     const SizedBox(height: 12),
                     ElevatedButton.icon(
                       onPressed: _canSubmit ? _confirmPhoto : null,
                       icon: const Icon(Icons.upload),
-                      label: const Text('Submit Reading'),
+                      label: Text(l10n.submitReadingButton),
                     ),
                   ],
                 ),
@@ -980,19 +1293,19 @@ class _SiteWeatherCardState extends State<_SiteWeatherCard> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: Colors.grey,
+                    color: AppColors.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 8),
                 if (latest == null)
-                  const Text('No weather data recorded yet — fetching...')
+                  const Text('No weather data recorded yet â€” fetching...')
                 else ...[
                   Text(
                     'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
                     '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
                   ),
                   Text(
-                    'Temperature: ${latest.temperature.toStringAsFixed(1)}°C',
+                    'Temperature: ${latest.temperature.toStringAsFixed(1)}Â°C',
                   ),
                   Text('Humidity: ${latest.humidity.toStringAsFixed(0)}%'),
                   Text('Conditions: ${latest.weatherDescription}'),
@@ -1001,6 +1314,227 @@ class _SiteWeatherCardState extends State<_SiteWeatherCard> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+/// Square scan-frame overlay for the pH strip camera view â€” same visual
+/// style (white L-shaped bracket corners, not a full border) as
+/// qr_scan_screen.dart's _ScanFrame/_ScanFrameCornerPainter. Purely
+/// decorative â€” has no bearing on _phSampleRegion, which samples a fixed
+/// fraction of the actual captured image regardless of how this looks.
+class _PhGuideBox extends StatelessWidget {
+  const _PhGuideBox();
+
+  static const double _size = 200;
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: SizedBox(
+        width: _size,
+        height: _size,
+        child: CustomPaint(painter: _PhGuideBoxPainter()),
+      ),
+    );
+  }
+}
+
+class _PhGuideBoxPainter extends CustomPainter {
+  const _PhGuideBoxPainter();
+
+  static const double _cornerLength = 28;
+  static const double _strokeWidth = 4;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = _strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    // Top-left
+    canvas.drawLine(Offset.zero, const Offset(_cornerLength, 0), paint);
+    canvas.drawLine(Offset.zero, const Offset(0, _cornerLength), paint);
+    // Top-right
+    canvas.drawLine(
+      Offset(size.width, 0),
+      Offset(size.width - _cornerLength, 0),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(size.width, 0),
+      Offset(size.width, _cornerLength),
+      paint,
+    );
+    // Bottom-left
+    canvas.drawLine(
+      Offset(0, size.height),
+      Offset(_cornerLength, size.height),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(0, size.height),
+      Offset(0, size.height - _cornerLength),
+      paint,
+    );
+    // Bottom-right
+    canvas.drawLine(
+      Offset(size.width, size.height),
+      Offset(size.width - _cornerLength, size.height),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(size.width, size.height),
+      Offset(size.width, size.height - _cornerLength),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _PhGuideBoxPainter oldDelegate) => false;
+}
+
+/// Small read-only pill showing an AI-detected value, kept visually distinct
+/// from (and never written into) the manual entry field next to it â€” the
+/// officer sees the AI's suggestion but always types their own reading.
+class _AiPredictionChip extends StatelessWidget {
+  const _AiPredictionChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.auto_awesome, size: 14, color: AppColors.primary),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              label,
+              style: textTheme.labelSmall?.copyWith(
+                color: AppColors.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Water-quality result card shown after a pH strip scan â€” colored
+/// icon+label, the AI-predicted pH, confidence, and description. Confidence
+/// and the italic disclaimer at the bottom exist specifically so this reads
+/// as an estimate to verify, not a precise lab measurement.
+class _PhResultCard extends StatelessWidget {
+  const _PhResultCard({required this.result, required this.assessment});
+
+  final PhDetectionResult result;
+  final WaterQualityAssessment assessment;
+
+  Color get _statusColor {
+    switch (assessment.status) {
+      case 'Safe':
+        return Colors.green;
+      case 'Caution':
+        return Colors.orange;
+      default:
+        return Colors.red;
+    }
+  }
+
+  String get _statusEmoji {
+    switch (assessment.status) {
+      case 'Safe':
+        return 'ðŸŸ¢';
+      case 'Caution':
+        return 'ðŸŸ¡';
+      default:
+        return 'ðŸ”´';
+    }
+  }
+
+  // Maps the underlying assessment.status data value ('Safe'/'Caution'/
+  // 'Unsafe', also used for the Reading's waterQualityStatus field and the
+  // color/emoji above) to its localized display text â€” display-only, the
+  // stored value itself is untouched.
+  String _localizedStatus(AppLocalizations l10n) {
+    switch (assessment.status) {
+      case 'Safe':
+        return l10n.safe;
+      case 'Caution':
+        return l10n.caution;
+      default:
+        return l10n.unsafe;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _statusColor;
+    final l10n = AppLocalizations.of(context)!;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(_statusEmoji, style: const TextStyle(fontSize: 18)),
+              const SizedBox(width: 8),
+              Text(
+                _localizedStatus(l10n),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'AI Predicted pH: ${result.ph.toStringAsFixed(1)}',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Confidence: ${result.confidence.toStringAsFixed(0)}%',
+            style: TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 6),
+          Text(assessment.description, style: const TextStyle(fontSize: 12)),
+          const SizedBox(height: 4),
+          Text(
+            'Color-based estimate from a strip photo â€” affected by '
+            'lighting and not a lab-grade measurement.',
+            style: TextStyle(
+              fontSize: 10,
+              fontStyle: FontStyle.italic,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }

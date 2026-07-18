@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../../l10n/app_localizations.dart';
+import '../../main.dart' show localeNotifier, setAppLocale;
 import '../../models/site_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
@@ -315,6 +317,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context)!;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -335,7 +338,7 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               children: [
                 Text(
-                  'VARUNA X',
+                  l10n.appTitle,
                   textAlign: TextAlign.center,
                   style: textTheme.headlineLarge?.copyWith(
                     color: AppColors.onPrimary,
@@ -373,7 +376,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Secure Access',
+                        l10n.loginTitle,
                         textAlign: TextAlign.center,
                         style: textTheme.headlineLarge?.copyWith(
                           color: AppColors.onSurface,
@@ -381,14 +384,16 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Enter your credentials to monitor field data.',
+                        l10n.loginSubtitle,
                         textAlign: TextAlign.center,
                         style: textTheme.bodyMedium?.copyWith(
                           color: AppColors.onSurfaceVariant,
                         ),
                       ),
-                      const SizedBox(height: 32),
-                      Text('Email Address', style: textTheme.labelMedium),
+                      const SizedBox(height: 24),
+                      const _LanguageSelector(),
+                      const SizedBox(height: 24),
+                      Text(l10n.emailLabel, style: textTheme.labelMedium),
                       const SizedBox(height: 8),
                       TextField(
                         controller: _emailController,
@@ -400,7 +405,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 20),
-                      Text('Password', style: textTheme.labelMedium),
+                      Text(l10n.passwordLabel, style: textTheme.labelMedium),
                       const SizedBox(height: 8),
                       TextField(
                         controller: _passwordController,
@@ -424,13 +429,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       else
                         ElevatedButton(
                           onPressed: _login,
-                          child: const Row(
+                          child: Row(
                             mainAxisSize: MainAxisSize.min,
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Text('Login'),
-                              SizedBox(width: 8),
-                              Icon(Icons.arrow_forward, size: 18),
+                              Text(l10n.loginButton),
+                              const SizedBox(width: 8),
+                              const Icon(Icons.arrow_forward, size: 18),
                             ],
                           ),
                         ),
@@ -470,6 +475,89 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Horizontal row of language buttons shown above the login fields. Tapping
+/// one calls [setAppLocale], which updates [localeNotifier] (rebuilding the
+/// whole app immediately via the ValueListenableBuilder in main.dart) and
+/// persists the choice to SharedPreferences for next launch.
+class _LanguageSelector extends StatelessWidget {
+  const _LanguageSelector();
+
+  static const _languages = <(String code, String label)>[
+    ('hi', '🇮🇳 हिं'),
+    ('en', 'EN'),
+    ('ta', 'தமிழ்'),
+    ('te', 'తెలుగు'),
+    ('kn', 'ಕನ್ನಡ'),
+    ('ml', 'മലയാളം'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Locale>(
+      valueListenable: localeNotifier,
+      builder: (context, currentLocale, _) {
+        return Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final (code, label) in _languages)
+              _LanguageChip(
+                label: label,
+                isSelected: currentLocale.languageCode == code,
+                onTap: () => setAppLocale(Locale(code)),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _LanguageChip extends StatelessWidget {
+  const _LanguageChip({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: isSelected ? AppColors.primary : Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        side: BorderSide(
+          color: isSelected ? AppColors.primary : AppColors.outlineVariant,
+        ),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: isSelected
+                  ? AppColors.onPrimary
+                  : AppColors.onSurfaceVariant,
+            ),
+          ),
+        ),
       ),
     );
   }

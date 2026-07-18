@@ -81,6 +81,56 @@ class SitePickerScreen extends StatelessWidget {
   }
 }
 
+// Small location-map thumbnail — an OpenStreetMap tile centered on the
+// site's coordinates via the free, keyless staticmap.openstreetmap.de
+// service. This is a MAP of the site's location, not an actual photo of
+// the dam/river (no free image API provides that). Falls back to a plain
+// pin icon if the network image can't load (e.g. offline in the field).
+class _SiteMapThumbnail extends StatelessWidget {
+  const _SiteMapThumbnail({required this.site});
+
+  final Site site;
+
+  @override
+  Widget build(BuildContext context) {
+    final url =
+        'https://staticmap.openstreetmap.de/staticmap.php'
+        '?center=${site.latitude},${site.longitude}'
+        '&zoom=15&size=64x64&maptype=mapnik'
+        '&markers=${site.latitude},${site.longitude},red-pushpin';
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+      child: Image.network(
+        url,
+        width: 56,
+        height: 56,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return const SizedBox(
+            width: 56,
+            height: 56,
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) => Container(
+          width: 56,
+          height: 56,
+          color: AppColors.secondaryContainer,
+          child: const Icon(Icons.location_on, color: AppColors.primary),
+        ),
+      ),
+    );
+  }
+}
+
 class _SiteCard extends StatelessWidget {
   const _SiteCard({required this.site});
 
@@ -105,7 +155,7 @@ class _SiteCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              const Icon(Icons.location_on, color: AppColors.primary),
+              _SiteMapThumbnail(site: site),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

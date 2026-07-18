@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
 import 'history_screen.dart';
 import 'review_screen.dart';
@@ -29,6 +30,7 @@ class SupervisorHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context)!;
 
     return Scaffold(
       appBar: AppBar(
@@ -43,7 +45,7 @@ class SupervisorHomeScreen extends StatelessWidget {
         titleSpacing: 0,
         title: Row(
           children: [
-            const Text('VARUNA X', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(l10n.appTitle, style: const TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -51,9 +53,9 @@ class SupervisorHomeScreen extends StatelessWidget {
                 color: Colors.white24,
                 borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
               ),
-              child: const Text(
-                'SUPERVISOR',
-                style: TextStyle(
+              child: Text(
+                l10n.supervisorTitle.toUpperCase(),
+                style: const TextStyle(
                   color: Colors.white,
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
@@ -89,13 +91,13 @@ class SupervisorHomeScreen extends StatelessWidget {
             // badge is omitted rather than showing a fabricated number.
             _HomeActionCard(
               icon: Icons.checklist,
-              title: 'Review Readings',
+              title: l10n.reviewReadings,
               onTap: () => _openReview(context),
             ),
             const SizedBox(height: 16),
             _HomeActionCard(
               icon: Icons.history,
-              title: 'History',
+              title: l10n.history,
               onTap: () => _openHistory(context),
             ),
           ],
@@ -109,9 +111,9 @@ class SupervisorHomeScreen extends StatelessWidget {
         onTap: (index) {
           if (index == 1) _openHistory(context);
         },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'History'),
+        items: [
+          BottomNavigationBarItem(icon: const Icon(Icons.home), label: l10n.home),
+          BottomNavigationBarItem(icon: const Icon(Icons.history), label: l10n.history),
         ],
       ),
     );

@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
 import '../../services/user_lookup_service.dart';
@@ -101,9 +102,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
           builder: (context, pendingSnapshot) {
             final pendingDocs = pendingSnapshot.data?.docs ?? [];
 
+            final l10n = AppLocalizations.of(context)!;
             return Scaffold(
               appBar: AppBar(
-                title: const Text('Review Readings'),
+                title: Text(l10n.reviewReadings),
                 actions: [
                   if (pendingSnapshot.hasData)
                     Center(child: _CountPill(count: pendingDocs.length)),
@@ -346,6 +348,7 @@ class _ReadingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context)!;
     final siteName = site?.name ?? reading.siteId;
 
     return Card(
@@ -401,7 +404,15 @@ class _ReadingCard extends StatelessWidget {
             if (reading.phLevel != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text('pH: ${reading.phLevel!.toStringAsFixed(1)}'),
+                child: Row(
+                  children: [
+                    Text('pH: ${reading.phLevel!.toStringAsFixed(1)}'),
+                    if (reading.waterQualityStatus != null) ...[
+                      const SizedBox(width: 8),
+                      _WaterQualityBadge(status: reading.waterQualityStatus!),
+                    ],
+                  ],
+                ),
               ),
             if (site != null) ...[
               const SizedBox(height: 12),
@@ -424,7 +435,7 @@ class _ReadingCard extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: () => _reject(context),
                   icon: const Icon(Icons.close),
-                  label: const Text('Reject'),
+                  label: Text(l10n.reject),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.red.shade600,
                     side: BorderSide(color: Colors.red.shade600),
@@ -434,7 +445,7 @@ class _ReadingCard extends StatelessWidget {
                 ElevatedButton.icon(
                   onPressed: () => _approve(context),
                   icon: const Icon(Icons.check),
-                  label: const Text('Approve'),
+                  label: Text(l10n.approve),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green.shade600,
                     foregroundColor: Colors.white,
@@ -672,6 +683,62 @@ class _ComparisonCell extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Small colored pill showing a reading's water-quality classification
+/// (from PhDetectionService.classifyWaterQuality, stored on the reading as
+/// Reading.waterQualityStatus) alongside its pH value.
+class _WaterQualityBadge extends StatelessWidget {
+  const _WaterQualityBadge({required this.status});
+
+  final String status;
+
+  Color get _color {
+    switch (status) {
+      case 'Safe':
+        return Colors.green;
+      case 'Caution':
+        return Colors.orange;
+      default:
+        return Colors.red;
+    }
+  }
+
+  // Maps the underlying status data value ('Safe'/'Caution'/'Unsafe', also
+  // used for the color above and stored as-is on Reading.waterQualityStatus)
+  // to its localized display text — display-only.
+  String _localizedStatus(AppLocalizations l10n) {
+    switch (status) {
+      case 'Safe':
+        return l10n.safe;
+      case 'Caution':
+        return l10n.caution;
+      default:
+        return l10n.unsafe;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _color;
+    final l10n = AppLocalizations.of(context)!;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        border: Border.all(color: color),
+      ),
+      child: Text(
+        _localizedStatus(l10n),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+        ),
       ),
     );
   }

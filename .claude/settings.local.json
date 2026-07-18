@@ -44,7 +44,14 @@
       "Bash(node *)",
       "Bash(rm -f /tmp_flutter_run.log)",
       "Bash(flutter run *)",
-      "Bash(echo \"started PID $!\")"
+      "Bash(echo \"started PID $!\")",
+      "Bash(curl *)",
+      "Bash(firebase firestore:indexes --project varuna-x-28174)",
+      "Bash(gcloud --version)",
+      "Bash(gcloud config *)",
+      "Bash(firebase --help)",
+      "Bash(firebase firestore:delete *)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }
