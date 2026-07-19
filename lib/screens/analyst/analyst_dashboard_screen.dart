@@ -14,7 +14,16 @@ import '../../utils/report_generator.dart';
 
 const _statusOptions = ['All', 'Pending', 'Approved', 'Rejected'];
 
-enum _DashboardTab { overview, detailed }
+// ---- Design tokens for this screen's redesign ----
+const _darkBlue = Color(0xFF1A3A57);
+const _pageBackground = Color(0xFFF8F9FA);
+const _cardRadius = 12.0;
+const _sectionLabelStyle = TextStyle(
+  fontSize: 12,
+  fontWeight: FontWeight.w700,
+  color: AppColors.onSurfaceVariant,
+  letterSpacing: 0.3,
+);
 
 Color _statusColor(String status) {
   switch (status.toLowerCase()) {
@@ -53,6 +62,146 @@ String _timeAgo(DateTime dt) {
   return '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
 }
 
+// ---- Demo-only hardcoded river connections, used to derive the cascade
+// banner / release recommendations / river network cascade notes below.
+// Deliberately client-side only (no new Firestore collection/query) and
+// matched by case-insensitive substring against Site.name rather than
+// exact equality, since seeded/demo site names don't always match these
+// short keys exactly (e.g. a seeded KRS site named "Krishna Raja Sagara
+// (KRS) Dam"). ----
+const List<({String upstreamKey, String? downstreamKey})>
+_demoReleaseChain = [
+  (upstreamKey: 'krishna raja sagara', downstreamKey: 'mettur dam'),
+  (upstreamKey: 'mettur dam', downstreamKey: 'test site'),
+  (upstreamKey: 'test site', downstreamKey: null), // river mouth
+];
+
+String? _demoDownstreamKeyFor(String siteName) {
+  final lower = siteName.toLowerCase();
+  for (final link in _demoReleaseChain) {
+    if (lower.contains(link.upstreamKey)) return link.downstreamKey;
+  }
+  return null;
+}
+
+Site? _findSiteByNameKey(List<Site> sites, String key) {
+  for (final s in sites) {
+    if (s.name.toLowerCase().contains(key)) return s;
+  }
+  return null;
+}
+
+/// Latest recorded level per site, keyed by siteId. Relies on [allReadings]
+/// already being newest-first (the dashboard's readings query orders by
+/// timestamp descending), so the first match per site is its latest usable
+/// reading.
+Map<String, double> _latestLevelBySite(List<Reading> allReadings) {
+  final result = <String, double>{};
+  for (final r in allReadings) {
+    if (result.containsKey(r.siteId)) continue;
+    final level = r.manualLevel ?? r.aiDetectedLevel;
+    if (level == null) continue;
+    result[r.siteId] = level;
+  }
+  return result;
+}
+
+enum _Severity { red, orange, yellow, normal }
+
+// Thresholds match the language already used in this app's generated
+// reading summaries: 80% of danger = "approaching" (yellow), 95% = "near"
+// (orange), 100%+ = at/above danger (red).
+_Severity _severityFor(double level, double dangerLevel) {
+  final ratio = dangerLevel > 0 ? level / dangerLevel : 0.0;
+  if (ratio >= 1.0) return _Severity.red;
+  if (ratio >= 0.95) return _Severity.orange;
+  if (ratio >= 0.80) return _Severity.yellow;
+  return _Severity.normal;
+}
+
+Color _severityColor(_Severity s) {
+  switch (s) {
+    case _Severity.red:
+      return Colors.red;
+    case _Severity.orange:
+      return Colors.orange;
+    case _Severity.yellow:
+      return Colors.amber.shade700;
+    case _Severity.normal:
+      return Colors.green;
+  }
+}
+
+String _severityLabel(_Severity s) {
+  switch (s) {
+    case _Severity.red:
+      return 'Red';
+    case _Severity.orange:
+      return 'Orange';
+    case _Severity.yellow:
+      return 'Yellow';
+    case _Severity.normal:
+      return 'Normal';
+  }
+}
+
+/// A site currently above its own danger level, paired with its
+/// (demo-hardcoded) downstream site — feeds the cascade banner, the
+/// release recommendation cards, and the river network cascade notes, so
+/// the "which sites are risky right now" computation only happens once
+/// per build.
+class _CascadeLink {
+  _CascadeLink({
+    required this.site,
+    required this.currentLevel,
+    required this.downstreamSite,
+    required this.downstreamLevel,
+  });
+
+  final Site site;
+  final double currentLevel;
+  final Site? downstreamSite;
+  final double? downstreamLevel;
+
+  bool get releaseSafe {
+    // No downstream site at all (river mouth) — nothing to flood, so a
+    // release is safe by default.
+    if (downstreamSite == null || downstreamLevel == null) return true;
+    return downstreamLevel! < downstreamSite!.dangerLevel;
+  }
+}
+
+List<_CascadeLink> _computeCascadeLinks(
+  List<Site> sites,
+  Map<String, double> levelBySite,
+) {
+  final links = <_CascadeLink>[];
+  for (final site in sites) {
+    final level = levelBySite[site.siteId];
+    if (level == null || level < site.dangerLevel) continue;
+
+    final downstreamKey = _demoDownstreamKeyFor(site.name);
+    Site? downstreamSite;
+    double? downstreamLevel;
+    if (downstreamKey != null) {
+      downstreamSite = _findSiteByNameKey(sites, downstreamKey);
+      if (downstreamSite != null) {
+        downstreamLevel = levelBySite[downstreamSite.siteId];
+      }
+    }
+
+    links.add(
+      _CascadeLink(
+        site: site,
+        currentLevel: level,
+        downstreamSite: downstreamSite,
+        downstreamLevel: downstreamLevel,
+      ),
+    );
+  }
+  return links;
+}
+
 class AnalystDashboardScreen extends StatefulWidget {
   const AnalystDashboardScreen({super.key});
 
@@ -63,7 +212,7 @@ class AnalystDashboardScreen extends StatefulWidget {
 class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   String _statusFilter = 'All';
   String? _siteFilterId;
-  _DashboardTab _activeTab = _DashboardTab.overview;
+  String? _selectedTrendSiteId;
 
   final Set<String> _seenAlertIds = {};
   bool _alertsInitialized = false;
@@ -93,7 +242,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   // Compares this snapshot of active alerts against the previous one
   // (tracked via _seenAlertIds) and pops up a dialog for any reading that
   // wasn't there before. The very first snapshot just establishes the
-  // baseline â€” otherwise every pre-existing alert would trigger a popup the
+  // baseline — otherwise every pre-existing alert would trigger a popup the
   // moment this screen opens.
   void _handleAlertReadings(
     List<Reading> alertReadings,
@@ -119,9 +268,9 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
         await showDialog<void>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('âš ï¸ Water Level Alert'),
+            title: const Text('⚠️ Water Level Alert'),
             content: Text(
-              'âš ï¸ Water Level Alert â€” $siteName has exceeded its danger '
+              '⚠️ Water Level Alert — $siteName has exceeded its danger '
               'threshold',
             ),
             actions: [
@@ -138,9 +287,6 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = AuthService().currentUser;
-    final uid = user?.uid;
-
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('sites').snapshots(),
       builder: (context, sitesSnapshot) {
@@ -154,7 +300,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           // Equality filter only (no orderBy on a second field), same
           // convention used elsewhere in this app to avoid requiring a
-          // composite Firestore index â€” sorted client-side below.
+          // composite Firestore index — sorted client-side below.
           stream: FirebaseFirestore.instance
               .collection('readings')
               .where('isAlert', isEqualTo: true)
@@ -184,7 +330,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                 // Scaffold now lives here, one level deeper than before, so
                 // the app bar's notification bell can reflect alertReadings
                 // (the same already-computed list the alert banner already
-                // used) â€” same queries throughout, just relocated.
+                // used) — same queries throughout, just relocated.
                 final l10n = AppLocalizations.of(context)!;
                 final Widget body;
                 if (readingsSnapshot.hasError) {
@@ -216,86 +362,136 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                     return statusMatches && siteMatches;
                   }).toList();
 
-                  // The whole body scrolls as one column now: the trend
-                  // charts + weather section pushed total fixed-height
-                  // content past the viewport on smaller screens, and a
-                  // Column can't shrink non-Expanded children to fit, so it
-                  // overflowed at the bottom instead of scrolling. The
-                  // reading list below is no longer its own Expanded/scrolling
-                  // region â€” it's shrink-wrapped into this single scroll view
-                  // so nothing gets clipped regardless of content height.
+                  final levelBySite = _latestLevelBySite(readings);
+                  final cascadeLinks = _computeCascadeLinks(sites, levelBySite);
+
+                  final trendSiteId = _selectedTrendSiteId ??
+                      (sites.isNotEmpty ? sites.first.siteId : null);
+                  final trendSite = sites.isEmpty
+                      ? null
+                      : sites.firstWhere(
+                          (s) => s.siteId == trendSiteId,
+                          orElse: () => sites.first,
+                        );
+
+                  // The whole body scrolls as one column: every section
+                  // below is always visible (no tabs), matching the new
+                  // top-to-bottom layout.
                   body = SingleChildScrollView(
+                    padding: const EdgeInsets.only(bottom: 16),
                     child: Column(
                       children: [
-                        _WelcomeHeader(uid: uid, email: user?.email),
-                        // Alerts are safety-critical, so they stay visible
-                        // regardless of which tab is active below.
+                        _CascadeRiskBanner(links: cascadeLinks),
                         _AlertBanner(
                           readings: alertReadings,
                           siteById: siteById,
                         ),
-                        if (_activeTab == _DashboardTab.overview) ...[
-                          _StatsRow(
-                            readings: readings,
-                            alertCount: alertReadings.length,
-                          ),
-                          const SizedBox(height: 8),
-                          _TrendChartsSection(
+                        _StatsRow(
+                          readings: readings,
+                          alertCount: alertReadings.length,
+                        ),
+                        _WarningDistributionSection(
+                          sites: sites,
+                          levelBySite: levelBySite,
+                        ),
+                        if (trendSite != null)
+                          _WaterLevelTrendSection(
                             sites: sites,
-                            allReadings: readings,
-                          ),
-                        ] else ...[
-                          _FilterRow(
-                            statusFilter: _statusFilter,
-                            siteFilterId: _siteFilterId,
-                            sites: sites,
-                            onStatusChanged: (value) =>
-                                setState(() => _statusFilter = value),
+                            selectedSite: trendSite,
                             onSiteChanged: (value) =>
-                                setState(() => _siteFilterId = value),
+                                setState(() => _selectedTrendSiteId = value),
                           ),
-                          const Divider(height: 1),
-                          if (filteredReadings.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 24),
-                              child: Center(
-                                child: Text(
-                                  'No readings match the current filter',
-                                ),
+                        _ReleaseRecommendationsSection(links: cascadeLinks),
+                        _RiverNetworkSection(
+                          sites: sites,
+                          levelBySite: levelBySite,
+                          cascadeLinks: cascadeLinks,
+                        ),
+                        if (trendSite != null)
+                          _WeatherSection(
+                            key: ValueKey('weather_${trendSite.siteId}'),
+                            site: trendSite,
+                          ),
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text('Live Readings', style: _sectionLabelStyle),
+                          ),
+                        ),
+                        _FilterRow(
+                          statusFilter: _statusFilter,
+                          siteFilterId: _siteFilterId,
+                          sites: sites,
+                          onStatusChanged: (value) =>
+                              setState(() => _statusFilter = value),
+                          onSiteChanged: (value) =>
+                              setState(() => _siteFilterId = value),
+                        ),
+                        Container(
+                          margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(_cardRadius),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.05),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
                               ),
-                            )
-                          else
-                            ListView.builder(
-                              padding: const EdgeInsets.all(12),
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
-                              itemCount: filteredReadings.length,
-                              itemBuilder: (context, index) {
-                                final reading = filteredReadings[index];
-                                final siteName =
-                                    siteNameById[reading.siteId] ??
-                                    reading.siteId;
-                                return _ReadingCard(
-                                  reading: reading,
-                                  siteName: siteName,
-                                  site: siteById[reading.siteId],
-                                  onTap: () => _showDetail(
-                                    context,
-                                    reading,
-                                    siteName,
-                                    siteById[reading.siteId],
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              const _ReadingsTableHeader(),
+                              const Divider(height: 1),
+                              if (filteredReadings.isEmpty)
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 24),
+                                  child: Center(
+                                    child: Text(
+                                      'No readings match the current filter',
+                                    ),
                                   ),
-                                );
-                              },
-                            ),
-                        ],
+                                )
+                              else
+                                ListView.builder(
+                                  padding: const EdgeInsets.all(8),
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  itemCount: filteredReadings.length,
+                                  itemBuilder: (context, index) {
+                                    final reading = filteredReadings[index];
+                                    final siteName =
+                                        siteNameById[reading.siteId] ??
+                                        reading.siteId;
+                                    return _ReadingCard(
+                                      reading: reading,
+                                      siteName: siteName,
+                                      site: siteById[reading.siteId],
+                                      onTap: () => _showDetail(
+                                        context,
+                                        reading,
+                                        siteName,
+                                        siteById[reading.siteId],
+                                      ),
+                                    );
+                                  },
+                                ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   );
                 }
 
                 return Scaffold(
+                  backgroundColor: _pageBackground,
                   appBar: AppBar(
+                    backgroundColor: _darkBlue,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
                     leading: IconButton(
                       icon: const CircleAvatar(
                         backgroundColor: Colors.white24,
@@ -305,9 +501,18 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                       onPressed: () => _logout(context),
                     ),
                     titleSpacing: 0,
-                    title: Text(
-                      l10n.appTitle,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    title: Row(
+                      children: [
+                        Text(
+                          l10n.appTitle,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        const _LiveIndicator(),
+                      ],
                     ),
                     actions: [
                       Padding(
@@ -319,29 +524,6 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                     ],
                   ),
                   body: body,
-                  // Replaces the old top SegmentedButton â€” same _activeTab
-                  // state, same setState call, just triggered from a bottom
-                  // nav bar per the design instead of a top toggle.
-                  bottomNavigationBar: BottomNavigationBar(
-                    currentIndex: _activeTab == _DashboardTab.overview
-                        ? 0
-                        : 1,
-                    onTap: (index) => setState(() {
-                      _activeTab = index == 0
-                          ? _DashboardTab.overview
-                          : _DashboardTab.detailed;
-                    }),
-                    items: [
-                      BottomNavigationBarItem(
-                        icon: const Icon(Icons.home),
-                        label: l10n.home,
-                      ),
-                      BottomNavigationBarItem(
-                        icon: const Icon(Icons.history),
-                        label: l10n.history,
-                      ),
-                    ],
-                  ),
                 );
               },
             );
@@ -352,56 +534,47 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
   }
 }
 
-/// Purely visual 24h/7d toggle â€” has no wiring to the chart below it, which
-/// always shows its existing fixed last-30-days window. Local widget state
-/// only, so tapping a pill just changes which one looks selected.
-class _RangeToggle extends StatefulWidget {
-  const _RangeToggle();
-
-  @override
-  State<_RangeToggle> createState() => _RangeToggleState();
-}
-
-class _RangeToggleState extends State<_RangeToggle> {
-  int _selected = 0;
+class _LiveIndicator extends StatelessWidget {
+  const _LiveIndicator();
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: AppColors.secondaryContainer,
+        color: Colors.white.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
       ),
-      child: Row(
+      child: const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _rangePill('24h', 0),
-          _rangePill('7d', 1),
+          _LivePulseDot(),
+          SizedBox(width: 4),
+          Text(
+            'LIVE',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+              fontSize: 10,
+            ),
+          ),
         ],
       ),
     );
   }
+}
 
-  Widget _rangePill(String label, int index) {
-    final selected = _selected == index;
-    return InkWell(
-      onTap: () => setState(() => _selected = index),
-      borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
-            fontWeight: FontWeight.w600,
-            fontSize: 12,
-          ),
-        ),
+class _LivePulseDot extends StatelessWidget {
+  const _LivePulseDot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 6,
+      height: 6,
+      decoration: const BoxDecoration(
+        color: Colors.greenAccent,
+        shape: BoxShape.circle,
       ),
     );
   }
@@ -436,6 +609,62 @@ class _NotificationBell extends StatelessWidget {
   }
 }
 
+/// Item 2 — "Cascade Risk Warning" banner: amber left border, yellow
+/// background. Purely client-side (from the already-computed
+/// [_CascadeLink] list — no new Firestore query), shown only when at
+/// least one site above danger has a resolvable downstream site.
+class _CascadeRiskBanner extends StatelessWidget {
+  const _CascadeRiskBanner({required this.links});
+
+  final List<_CascadeLink> links;
+
+  @override
+  Widget build(BuildContext context) {
+    final withDownstream = links.where((l) => l.downstreamSite != null).toList();
+    if (withDownstream.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        borderRadius: BorderRadius.circular(_cardRadius),
+        border: Border(left: BorderSide(color: Colors.amber.shade700, width: 4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.water, color: Colors.amber.shade900, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Cascade Risk Warning',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.amber.shade900,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final link in withDownstream)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text(
+                '${link.site.name} is above danger — '
+                '${link.downstreamSite!.name} downstream may be affected.',
+                style: TextStyle(fontSize: 12, color: Colors.amber.shade900),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Item 3 — "Active Alerts" banner: red left border, pink background.
 class _AlertBanner extends StatelessWidget {
   const _AlertBanner({required this.readings, required this.siteById});
 
@@ -447,9 +676,13 @@ class _AlertBanner extends StatelessWidget {
     if (readings.isEmpty) return const SizedBox.shrink();
 
     return Container(
-      width: double.infinity,
-      color: Colors.red.shade50,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(_cardRadius),
+        border: Border(left: BorderSide(color: Colors.red.shade400, width: 4)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -486,7 +719,7 @@ class _AlertBannerRow extends StatelessWidget {
     final siteName = site?.name ?? reading.siteId;
     final dangerLevel = site?.dangerLevel;
     final level = reading.manualLevel ?? reading.aiDetectedLevel;
-    final levelText = level != null ? '${level.toStringAsFixed(1)}m' : 'â€”';
+    final levelText = level != null ? '${level.toStringAsFixed(1)}m' : '—';
     final dangerText = dangerLevel != null
         ? '${dangerLevel.toStringAsFixed(1)}m'
         : 'unknown';
@@ -494,14 +727,16 @@ class _AlertBannerRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Text(
-        'âš ï¸ $siteName: $levelText recorded, exceeds danger level of '
-        '$dangerText â€” ${_timeAgo(reading.timestamp)}',
+        '⚠️ $siteName: $levelText recorded, exceeds danger level of '
+        '$dangerText — ${_timeAgo(reading.timestamp)}',
         style: TextStyle(color: Colors.red.shade900),
       ),
     );
   }
 }
 
+/// Item 4 — 2x2 stats grid, each card with a colored top border matching
+/// its severity.
 class _StatsRow extends StatelessWidget {
   const _StatsRow({required this.readings, required this.alertCount});
 
@@ -513,7 +748,7 @@ class _StatsRow extends StatelessWidget {
     final now = DateTime.now();
     // "Approved Today" combines the two filter predicates already used
     // individually elsewhere on this dashboard (today's date, approved
-    // status) â€” no new query, just their intersection over the same
+    // status) — no new query, just their intersection over the same
     // already-fetched readings list.
     final approvedTodayCount = readings
         .where(
@@ -529,7 +764,7 @@ class _StatsRow extends StatelessWidget {
         .length;
 
     return Padding(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       child: GridView.count(
         crossAxisCount: 2,
         shrinkWrap: true,
@@ -539,25 +774,25 @@ class _StatsRow extends StatelessWidget {
         childAspectRatio: 1.6,
         children: [
           _StatCard(
-            label: 'Total Readings',
-            value: readings.length,
-            color: Colors.blue,
-          ),
-          _StatCard(
-            label: 'Danger Level',
+            label: 'Danger Sites',
             value: alertCount,
-            color: AppColors.error,
+            color: Colors.red,
             icon: Icons.warning_amber_rounded,
-          ),
-          _StatCard(
-            label: 'Pending Review',
-            value: pendingCount,
-            color: Colors.orange,
           ),
           _StatCard(
             label: 'Approved Today',
             value: approvedTodayCount,
             color: Colors.green,
+          ),
+          _StatCard(
+            label: 'Pending',
+            value: pendingCount,
+            color: Colors.orange,
+          ),
+          _StatCard(
+            label: 'Total Readings',
+            value: readings.length,
+            color: Colors.blue,
           ),
         ],
       ),
@@ -580,95 +815,401 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: color.withValues(alpha: 0.1),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (icon != null) ...[
-                  Icon(icon, color: color, size: 18),
-                  const SizedBox(width: 4),
-                ],
-                Text(
-                  '$value',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                  ),
-                ),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(_cardRadius),
+        border: Border(top: BorderSide(color: color, width: 4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, color: color, size: 18),
+                const SizedBox(width: 4),
               ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 12),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
+              Text(
+                '$value',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 12),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     );
   }
 }
 
-class _WelcomeHeader extends StatelessWidget {
-  const _WelcomeHeader({required this.uid, required this.email});
+/// Reusable white "section card": section-label header + content, 12px
+/// radius, used by items 5, 6, and 8 below.
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({required this.title, required this.child});
 
-  final String? uid;
-  final String? email;
+  final String title;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    if (uid == null) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(_cardRadius),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: _sectionLabelStyle),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
+    );
+  }
+}
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
-      builder: (context, snapshot) {
-        final userData = snapshot.data?.data() as Map<String, dynamic>?;
-        final userName = userData?['name'] ?? email ?? 'Analyst';
+/// Item 5 — "Warning Level Distribution": horizontal bars for how many
+/// sites currently fall into each of the Red/Orange/Yellow/Normal
+/// severity buckets, based on each site's latest recorded level vs its
+/// own danger threshold.
+class _WarningDistributionSection extends StatelessWidget {
+  const _WarningDistributionSection({
+    required this.sites,
+    required this.levelBySite,
+  });
 
-        return Padding(
-          padding: const EdgeInsets.only(left: 12, right: 12, top: 12),
-          child: Card(
-            elevation: 1,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
+  final List<Site> sites;
+  final Map<String, double> levelBySite;
+
+  @override
+  Widget build(BuildContext context) {
+    var red = 0, orange = 0, yellow = 0, normal = 0;
+    for (final site in sites) {
+      final level = levelBySite[site.siteId];
+      if (level == null) continue;
+      switch (_severityFor(level, site.dangerLevel)) {
+        case _Severity.red:
+          red++;
+          break;
+        case _Severity.orange:
+          orange++;
+          break;
+        case _Severity.yellow:
+          yellow++;
+          break;
+        case _Severity.normal:
+          normal++;
+          break;
+      }
+    }
+
+    final entries = [
+      (_severityLabel(_Severity.red), red, _severityColor(_Severity.red)),
+      (_severityLabel(_Severity.orange), orange, _severityColor(_Severity.orange)),
+      (_severityLabel(_Severity.yellow), yellow, _severityColor(_Severity.yellow)),
+      (_severityLabel(_Severity.normal), normal, _severityColor(_Severity.normal)),
+    ];
+    final maxCount = entries
+        .map((e) => e.$2)
+        .fold<int>(0, (a, b) => a > b ? a : b);
+
+    return _SectionCard(
+      title: 'Warning Level Distribution',
+      child: Column(
+        children: [
+          for (final entry in entries)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
                 children: [
-                  CircleAvatar(
-                    radius: 20,
-                    backgroundColor: Colors.blue.shade50,
-                    child: Icon(Icons.analytics, size: 22, color: Colors.blue.shade600),
+                  SizedBox(
+                    width: 56,
+                    child: Text(
+                      entry.$1,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                  const SizedBox(width: 12),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Stack(
                       children: [
-                        Text(
-                          'Welcome, $userName!',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                        Container(
+                          height: 18,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade200,
+                            borderRadius: BorderRadius.circular(4),
                           ),
                         ),
-                        Text(
-                          'Analyst Panel — monitor flood indicators and trend reports',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade600,
+                        FractionallySizedBox(
+                          widthFactor: maxCount == 0
+                              ? 0.0
+                              : (entry.$2 / maxCount).clamp(0.0, 1.0),
+                          child: Container(
+                            height: 18,
+                            decoration: BoxDecoration(
+                              color: entry.$3,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 24,
+                    child: Text(
+                      '${entry.$2}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Item 6 — "Water Level Trend": per-site line chart with a dashed danger
+/// threshold line. The site dropdown's selection is lifted to the parent
+/// state so the Weather card (item 9) further down the page can reuse the
+/// same selected site.
+class _WaterLevelTrendSection extends StatelessWidget {
+  const _WaterLevelTrendSection({
+    required this.sites,
+    required this.selectedSite,
+    required this.onSiteChanged,
+  });
+
+  final List<Site> sites;
+  final Site selectedSite;
+  final ValueChanged<String?> onSiteChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SectionCard(
+      title: 'Water Level Trend',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButton<String>(
+            value: selectedSite.siteId,
+            isExpanded: true,
+            items: sites
+                .map(
+                  (s) => DropdownMenuItem(value: s.siteId, child: Text(s.name)),
+                )
+                .toList(),
+            onChanged: onSiteChanged,
+          ),
+          const SizedBox(height: 8),
+          _SiteTrendLineChart(
+            key: ValueKey('trend_${selectedSite.siteId}'),
+            siteId: selectedSite.siteId,
+            site: selectedSite,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Line chart of one site's readings over the last 30 days (or all
+/// available history if the site has less than that), with a dashed red
+/// reference line at the site's danger level.
+class _SiteTrendLineChart extends StatelessWidget {
+  const _SiteTrendLineChart({super.key, required this.siteId, required this.site});
+
+  final String siteId;
+  final Site site;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      // Filtered by siteId only (no orderBy on a second field) so this
+      // doesn't require a composite Firestore index — sorting/windowing by
+      // timestamp happens client-side below, same convention the rest of
+      // this screen already uses for status/site filtering.
+      stream: FirebaseFirestore.instance
+          .collection('readings')
+          .where('siteId', isEqualTo: siteId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return SizedBox(
+            height: 220,
+            child: Center(child: Text('Failed to load trend: ${snapshot.error}')),
+          );
+        }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox(
+            height: 220,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final docs = snapshot.data?.docs ?? [];
+        final readings =
+            docs
+                .map(
+                  (doc) =>
+                      Reading.fromMap({...doc.data(), 'readingId': doc.id}),
+                )
+                .toList()
+              ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+        final cutoff = DateTime.now().subtract(const Duration(days: 30));
+        final spots = <FlSpot>[];
+        for (final r in readings) {
+          final level = r.manualLevel ?? r.aiDetectedLevel;
+          if (level == null) continue;
+          if (r.timestamp.isBefore(cutoff)) continue;
+          spots.add(FlSpot(r.timestamp.millisecondsSinceEpoch.toDouble(), level));
+        }
+
+        if (spots.length < 2) {
+          return const SizedBox(
+            height: 220,
+            child: Center(child: Text('Not enough data yet')),
+          );
+        }
+
+        final minX = spots.first.x;
+        final maxX = spots.last.x;
+        final dataValues = spots.map((s) => s.y).toList();
+        final lowest = [...dataValues, site.dangerLevel].reduce(
+          (a, b) => a < b ? a : b,
+        );
+        final highest = [...dataValues, site.dangerLevel].reduce(
+          (a, b) => a > b ? a : b,
+        );
+        final xRange = maxX - minX;
+        final xInterval = xRange > 0 ? xRange / 4 : 1.0;
+
+        return SizedBox(
+          height: 220,
+          child: LineChart(
+            LineChartData(
+              minX: minX,
+              maxX: maxX,
+              minY: lowest - 0.5,
+              maxY: highest + 0.5,
+              gridData: const FlGridData(show: true),
+              borderData: FlBorderData(show: true),
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  getTooltipItems: (touchedSpots) => touchedSpots.map((spot) {
+                    final date = DateTime.fromMillisecondsSinceEpoch(
+                      spot.x.toInt(),
+                    );
+                    return LineTooltipItem(
+                      '${_formatShortDate(date)}\n'
+                      '${spot.y.toStringAsFixed(2)}m',
+                      const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              titlesData: FlTitlesData(
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                leftTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: true, reservedSize: 36),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 28,
+                    interval: xInterval,
+                    getTitlesWidget: (value, meta) {
+                      final date = DateTime.fromMillisecondsSinceEpoch(
+                        value.toInt(),
+                      );
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          _formatShortDate(date),
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: spots,
+                  isCurved: false,
+                  color: AppColors.primary,
+                  barWidth: 2,
+                  dotData: const FlDotData(show: true),
+                  belowBarData: BarAreaData(
+                    show: true,
+                    color: AppColors.primary.withValues(alpha: 0.1),
+                  ),
+                ),
+              ],
+              extraLinesData: ExtraLinesData(
+                horizontalLines: [
+                  HorizontalLine(
+                    y: site.dangerLevel,
+                    color: Colors.red,
+                    strokeWidth: 2,
+                    dashArray: const [8, 4],
+                    label: HorizontalLineLabel(
+                      show: true,
+                      alignment: Alignment.topRight,
+                      style: const TextStyle(
+                        color: Colors.red,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      labelResolver: (_) => 'Danger: ${site.dangerLevel}m',
                     ),
                   ),
                 ],
@@ -677,6 +1218,427 @@ class _WelcomeHeader extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Item 7 — "Coordinated Release Recommendations": for every site above
+/// danger with a resolvable downstream site, a card flagging whether an
+/// upstream release would be safe. Pure client-side computation (from the
+/// already-computed [_CascadeLink] list) — this is a decision-support
+/// aid, not an automated control, hence the disclaimer footer.
+class _ReleaseRecommendationsSection extends StatelessWidget {
+  const _ReleaseRecommendationsSection({required this.links});
+
+  final List<_CascadeLink> links;
+
+  @override
+  Widget build(BuildContext context) {
+    if (links.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Coordinated Release Recommendations', style: _sectionLabelStyle),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final link in links) ...[
+                  _ReleaseSafetyCard(link: link),
+                  const SizedBox(width: 12),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Decision-support only — all release decisions must be made by '
+            'authorized dam operators following CWC protocols. This system '
+            'does not control any physical infrastructure.',
+            style: TextStyle(
+              fontSize: 10,
+              fontStyle: FontStyle.italic,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReleaseSafetyCard extends StatelessWidget {
+  const _ReleaseSafetyCard({required this.link});
+
+  final _CascadeLink link;
+
+  @override
+  Widget build(BuildContext context) {
+    final safe = link.releaseSafe;
+    final color = safe ? Colors.green : Colors.red;
+    final downstreamSite = link.downstreamSite;
+    final downstreamLevel = link.downstreamLevel;
+
+    final String reason;
+    if (downstreamSite == null || downstreamLevel == null) {
+      reason = 'No downstream site — this is the river mouth. Release is safe.';
+    } else if (downstreamLevel >= downstreamSite.dangerLevel) {
+      reason = 'Downstream ${downstreamSite.name} is at '
+          '${downstreamLevel.toStringAsFixed(1)}m — already above danger';
+    } else {
+      reason = 'Downstream is safe — current level '
+          '${downstreamLevel.toStringAsFixed(1)}m below danger '
+          '${downstreamSite.dangerLevel.toStringAsFixed(1)}m';
+    }
+
+    return Container(
+      width: 240,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(_cardRadius),
+        border: Border(top: BorderSide(color: color, width: 4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              link.site.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '${link.currentLevel.toStringAsFixed(1)}m vs danger '
+              '${link.site.dangerLevel.toStringAsFixed(1)}m',
+              style: const TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+                border: Border.all(color: color),
+              ),
+              child: Text(
+                safe ? 'RELEASE SAFE' : 'DO NOT RELEASE',
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(reason, style: const TextStyle(fontSize: 11, color: Color(0xFF1A1A1A))),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Item 8 — "River Network Status": every site as a row, colored left
+/// border by severity, with a cascade-warning note for any site that also
+/// shows up in [_CascadeLink] (i.e. above danger with a downstream site
+/// on the same demo river chain).
+class _RiverNetworkSection extends StatelessWidget {
+  const _RiverNetworkSection({
+    required this.sites,
+    required this.levelBySite,
+    required this.cascadeLinks,
+  });
+
+  final List<Site> sites;
+  final Map<String, double> levelBySite;
+  final List<_CascadeLink> cascadeLinks;
+
+  @override
+  Widget build(BuildContext context) {
+    if (sites.isEmpty) {
+      return const _SectionCard(
+        title: 'River Network Status',
+        child: Text('No sites available yet.'),
+      );
+    }
+
+    final cascadeBySiteId = {for (final l in cascadeLinks) l.site.siteId: l};
+
+    return _SectionCard(
+      title: 'River Network Status',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final site in sites) ...[
+            _RiverNetworkRow(
+              site: site,
+              level: levelBySite[site.siteId],
+              cascadeLink: cascadeBySiteId[site.siteId],
+            ),
+            const SizedBox(height: 8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RiverNetworkRow extends StatelessWidget {
+  const _RiverNetworkRow({
+    required this.site,
+    required this.level,
+    required this.cascadeLink,
+  });
+
+  final Site site;
+  final double? level;
+  final _CascadeLink? cascadeLink;
+
+  @override
+  Widget build(BuildContext context) {
+    final severity = level == null ? null : _severityFor(level!, site.dangerLevel);
+    final color = severity == null ? Colors.grey : _severityColor(severity);
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(left: BorderSide(color: color, width: 4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  site.name,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                level != null
+                    ? '${level!.toStringAsFixed(1)}m / ${site.dangerLevel.toStringAsFixed(1)}m'
+                    : 'No data',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: color,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          if (cascadeLink != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              cascadeLink!.downstreamSite != null
+                  ? 'Cascade warning — may affect downstream '
+                      '${cascadeLink!.downstreamSite!.name}'
+                  : 'Above danger — river mouth, no downstream site',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.amber.shade900,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Item 9 — Weather card: dark blue background, temperature, rainfall,
+/// humidity for the same site currently selected in the Water Level Trend
+/// section above. Shows the most recent OpenWeatherMap reading recorded
+/// for that site (from the `weather_data` collection), with a manual
+/// refresh button that fetches a fresh reading on demand via
+/// [WeatherService]. Also auto-triggers one fetch when a site has no
+/// weather data at all yet (same fallback capture_screen.dart's
+/// _SiteWeatherCard already has) — without this, any site that was never
+/// used in the field-capture flow would show "No weather data recorded
+/// yet." indefinitely unless someone remembers to tap the refresh icon.
+class _WeatherSection extends StatefulWidget {
+  const _WeatherSection({super.key, required this.site});
+
+  final Site site;
+
+  @override
+  State<_WeatherSection> createState() => _WeatherSectionState();
+}
+
+class _WeatherSectionState extends State<_WeatherSection> {
+  final _weatherService = WeatherService();
+  bool _isRefreshing = false;
+  bool _hasTriggeredFetch = false;
+
+  Future<void> _refresh() async {
+    setState(() => _isRefreshing = true);
+    await _weatherService.recordWeatherForSite(
+      widget.site.siteId,
+      widget.site.latitude,
+      widget.site.longitude,
+    );
+    if (!mounted) return;
+    setState(() => _isRefreshing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _darkBlue,
+        borderRadius: BorderRadius.circular(_cardRadius),
+      ),
+      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        // Equality filter only (no orderBy on a second field), same
+        // convention used elsewhere in this app to avoid requiring a
+        // composite Firestore index — sorted client-side below to find
+        // the most recent entry.
+        stream: FirebaseFirestore.instance
+            .collection('weather_data')
+            .where('siteId', isEqualTo: widget.site.siteId)
+            .snapshots(),
+        builder: (context, snapshot) {
+          final docs = snapshot.data?.docs ?? [];
+          final readings =
+              docs.map((doc) => WeatherReading.fromMap(doc.data())).toList()
+                ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+          final latest = readings.isNotEmpty ? readings.first : null;
+
+          if (latest == null &&
+              !_hasTriggeredFetch &&
+              !_isRefreshing &&
+              snapshot.connectionState != ConnectionState.waiting) {
+            _hasTriggeredFetch = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _refresh();
+            });
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Weather — ',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    widget.site.name,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                  _isRefreshing
+                      ? const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation(Colors.white),
+                            ),
+                          ),
+                        )
+                      : IconButton(
+                          icon: const Icon(Icons.refresh, color: Colors.white),
+                          tooltip: 'Fetch latest weather',
+                          onPressed: _refresh,
+                        ),
+                ],
+              ),
+              if (latest == null)
+                const Text(
+                  'No weather data recorded yet.',
+                  style: TextStyle(color: Colors.white70),
+                )
+              else ...[
+                Text(
+                  'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
+                  '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                Text(
+                  'Temperature: ${latest.temperature.toStringAsFixed(1)}°C',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                Text(
+                  'Humidity: ${latest.humidity.toStringAsFixed(0)}%',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                Text(
+                  'Conditions: ${latest.weatherDescription}',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'As of ${_formatTimestamp(latest.timestamp)}',
+                  style: const TextStyle(fontSize: 11, color: Colors.white70),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ReadingsTableHeader extends StatelessWidget {
+  const _ReadingsTableHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    const style = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w700,
+      color: AppColors.onSurfaceVariant,
+    );
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Expanded(flex: 3, child: Text('SITE', style: style)),
+          Expanded(flex: 3, child: Text('TIME', style: style)),
+          Expanded(flex: 2, child: Text('LEVEL', style: style)),
+          Expanded(
+            flex: 2,
+            child: Text('STATUS', style: style, textAlign: TextAlign.right),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -699,7 +1661,7 @@ class _FilterRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -791,6 +1753,8 @@ class _FilterPill extends StatelessWidget {
   }
 }
 
+/// Item 10 — one row of the Live Readings table: site, time, level,
+/// status columns.
 class _ReadingCard extends StatelessWidget {
   const _ReadingCard({
     required this.reading,
@@ -810,11 +1774,16 @@ class _ReadingCard extends StatelessWidget {
     final level = reading.manualLevel ?? reading.aiDetectedLevel;
     final siteIdText = site?.siteCode ?? siteName;
 
-    return Card(
+    return Container(
       margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(_cardRadius),
+        border: Border.all(color: AppColors.outlineVariant),
+      ),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
+        borderRadius: BorderRadius.circular(_cardRadius),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Column(
@@ -840,7 +1809,7 @@ class _ReadingCard extends StatelessWidget {
                   Expanded(
                     flex: 2,
                     child: Text(
-                      level != null ? '${level.toStringAsFixed(1)}m' : 'â€”',
+                      level != null ? '${level.toStringAsFixed(1)}m' : '—',
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -965,7 +1934,7 @@ class _ReadingDetailDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // isAlert is already on the Reading itself (no new data) â€” a reading
+    // isAlert is already on the Reading itself (no new data) — a reading
     // that triggered a danger-level alert is called out as "Critical" here
     // rather than showing its ordinary pending/approved/rejected status.
     final isCritical = reading.isAlert;
@@ -1085,7 +2054,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                         label: 'Recorded Level',
                         value: level != null
                             ? '${level.toStringAsFixed(1)}m'
-                            : 'â€”',
+                            : '—',
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1094,7 +2063,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                         label: 'Threshold',
                         value: site != null
                             ? '${site!.dangerLevel.toStringAsFixed(1)}m'
-                            : 'â€”',
+                            : '—',
                       ),
                     ),
                   ],
@@ -1289,7 +2258,7 @@ class _WaterQualityBadge extends StatelessWidget {
 
   // Maps the underlying status data value ('Safe'/'Caution'/'Unsafe', also
   // used for the color above and stored as-is on Reading.waterQualityStatus)
-  // to its localized display text â€” display-only.
+  // to its localized display text — display-only.
   String _localizedStatus(AppLocalizations l10n) {
     switch (status) {
       case 'Safe':
@@ -1320,827 +2289,6 @@ class _WaterQualityBadge extends StatelessWidget {
           fontSize: 11,
         ),
       ),
-    );
-  }
-}
-
-/// New charts section: a per-site trend line (with a danger-level reference
-/// line) plus an all-sites reading-status bar chart. Purely additive â€” the
-/// stat cards, filters, and reading list above/below are untouched.
-class _TrendChartsSection extends StatefulWidget {
-  const _TrendChartsSection({required this.sites, required this.allReadings});
-
-  final List<Site> sites;
-  final List<Reading> allReadings;
-
-  @override
-  State<_TrendChartsSection> createState() => _TrendChartsSectionState();
-}
-
-class _TrendChartsSectionState extends State<_TrendChartsSection> {
-  String? _selectedSiteId;
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.sites.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Text('No sites available yet.'),
-      );
-    }
-
-    // Default to the first site until the analyst picks one explicitly.
-    final selectedSiteId = _selectedSiteId ?? widget.sites.first.siteId;
-    final selectedSite = widget.sites.firstWhere(
-      (s) => s.siteId == selectedSiteId,
-      orElse: () => widget.sites.first,
-    );
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Water Level Trend',
-                          style: Theme.of(context).textTheme.bodyLarge
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      // Purely decorative â€” this dashboard has no existing
-                      // time-range control to restyle, and the underlying
-                      // chart always shows the last 30 days regardless of
-                      // which pill looks selected. No new filtering logic.
-                      const _RangeToggle(),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Site',
-                    style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
-                  ),
-                  DropdownButton<String>(
-                    value: selectedSiteId,
-                    isExpanded: true,
-                    items: widget.sites
-                        .map(
-                          (s) => DropdownMenuItem(
-                            value: s.siteId,
-                            child: Text(s.name),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) =>
-                        setState(() => _selectedSiteId = value),
-                  ),
-                  const SizedBox(height: 8),
-                  _SiteTrendLineChart(
-                    key: ValueKey('trend_$selectedSiteId'),
-                    siteId: selectedSiteId,
-                    site: selectedSite,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          _WeatherSection(
-            key: ValueKey('weather_$selectedSiteId'),
-            site: selectedSite,
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Water Level â€” all sites (latest reading)',
-            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          _AllSitesLevelChart(sites: widget.sites, allReadings: widget.allReadings),
-          const SizedBox(height: 16),
-          const Text(
-            'Reading Status â€” all sites',
-            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          _StatusBarChart(readings: widget.allReadings),
-          const SizedBox(height: 12),
-          _StatusPieChart(readings: widget.allReadings),
-          const SizedBox(height: 16),
-          const Text(
-            'Submission Activity â€” last 30 days',
-            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          _SubmissionHeatmap(readings: widget.allReadings),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-}
-
-/// Line chart of one site's readings over the last 30 days (or all
-/// available history if the site has less than that), with a dashed red
-/// reference line at the site's danger level.
-class _SiteTrendLineChart extends StatelessWidget {
-  const _SiteTrendLineChart({super.key, required this.siteId, required this.site});
-
-  final String siteId;
-  final Site site;
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      // Filtered by siteId only (no orderBy on a second field) so this
-      // doesn't require a composite Firestore index â€” sorting/windowing by
-      // timestamp happens client-side below, same convention the rest of
-      // this screen already uses for status/site filtering.
-      stream: FirebaseFirestore.instance
-          .collection('readings')
-          .where('siteId', isEqualTo: siteId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return SizedBox(
-            height: 220,
-            child: Center(child: Text('Failed to load trend: ${snapshot.error}')),
-          );
-        }
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SizedBox(
-            height: 220,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        final docs = snapshot.data?.docs ?? [];
-        final readings =
-            docs
-                .map(
-                  (doc) =>
-                      Reading.fromMap({...doc.data(), 'readingId': doc.id}),
-                )
-                .toList()
-              ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-
-        final cutoff = DateTime.now().subtract(const Duration(days: 30));
-        final spots = <FlSpot>[];
-        for (final r in readings) {
-          final level = r.manualLevel ?? r.aiDetectedLevel;
-          if (level == null) continue;
-          if (r.timestamp.isBefore(cutoff)) continue;
-          spots.add(FlSpot(r.timestamp.millisecondsSinceEpoch.toDouble(), level));
-        }
-
-        if (spots.length < 2) {
-          return const SizedBox(
-            height: 220,
-            child: Center(child: Text('Not enough data yet')),
-          );
-        }
-
-        final minX = spots.first.x;
-        final maxX = spots.last.x;
-        final dataValues = spots.map((s) => s.y).toList();
-        final lowest = [...dataValues, site.dangerLevel].reduce(
-          (a, b) => a < b ? a : b,
-        );
-        final highest = [...dataValues, site.dangerLevel].reduce(
-          (a, b) => a > b ? a : b,
-        );
-        final xRange = maxX - minX;
-        final xInterval = xRange > 0 ? xRange / 4 : 1.0;
-
-        return SizedBox(
-          height: 220,
-          child: LineChart(
-            LineChartData(
-              minX: minX,
-              maxX: maxX,
-              minY: lowest - 0.5,
-              maxY: highest + 0.5,
-              gridData: const FlGridData(show: true),
-              borderData: FlBorderData(show: true),
-              lineTouchData: LineTouchData(
-                touchTooltipData: LineTouchTooltipData(
-                  getTooltipItems: (touchedSpots) => touchedSpots.map((spot) {
-                    final date = DateTime.fromMillisecondsSinceEpoch(
-                      spot.x.toInt(),
-                    );
-                    return LineTooltipItem(
-                      '${_formatShortDate(date)}\n'
-                      '${spot.y.toStringAsFixed(2)}m',
-                      const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-              titlesData: FlTitlesData(
-                topTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                rightTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                leftTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: true, reservedSize: 36),
-                ),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 28,
-                    interval: xInterval,
-                    getTitlesWidget: (value, meta) {
-                      final date = DateTime.fromMillisecondsSinceEpoch(
-                        value.toInt(),
-                      );
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          _formatShortDate(date),
-                          style: const TextStyle(fontSize: 10),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              lineBarsData: [
-                LineChartBarData(
-                  spots: spots,
-                  isCurved: false,
-                  color: Colors.blue,
-                  barWidth: 2,
-                  dotData: const FlDotData(show: true),
-                  belowBarData: BarAreaData(
-                    show: true,
-                    color: Colors.blue.withValues(alpha: 0.1),
-                  ),
-                ),
-              ],
-              extraLinesData: ExtraLinesData(
-                horizontalLines: [
-                  HorizontalLine(
-                    y: site.dangerLevel,
-                    color: Colors.red,
-                    strokeWidth: 2,
-                    dashArray: const [8, 4],
-                    label: HorizontalLineLabel(
-                      show: true,
-                      alignment: Alignment.topRight,
-                      style: const TextStyle(
-                        color: Colors.red,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      labelResolver: (_) => 'Danger: ${site.dangerLevel}m',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Shows the most recent OpenWeatherMap reading recorded for the selected
-/// site (from the `weather_data` collection), with a manual refresh button
-/// that fetches a fresh reading on demand via [WeatherService]. Also
-/// auto-triggers one fetch when a site has no weather data at all yet (same
-/// fallback capture_screen.dart's _SiteWeatherCard already has) â€” without
-/// this, any site that was never used in the field-capture flow would show
-/// "No weather data recorded yet." indefinitely unless someone remembers to
-/// tap the refresh icon.
-class _WeatherSection extends StatefulWidget {
-  const _WeatherSection({super.key, required this.site});
-
-  final Site site;
-
-  @override
-  State<_WeatherSection> createState() => _WeatherSectionState();
-}
-
-class _WeatherSectionState extends State<_WeatherSection> {
-  final _weatherService = WeatherService();
-  bool _isRefreshing = false;
-  bool _hasTriggeredFetch = false;
-
-  Future<void> _refresh() async {
-    setState(() => _isRefreshing = true);
-    await _weatherService.recordWeatherForSite(
-      widget.site.siteId,
-      widget.site.latitude,
-      widget.site.longitude,
-    );
-    if (!mounted) return;
-    setState(() => _isRefreshing = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          // Equality filter only (no orderBy on a second field), same
-          // convention used elsewhere in this app to avoid requiring a
-          // composite Firestore index â€” sorted client-side below to find
-          // the most recent entry.
-          stream: FirebaseFirestore.instance
-              .collection('weather_data')
-              .where('siteId', isEqualTo: widget.site.siteId)
-              .snapshots(),
-          builder: (context, snapshot) {
-            final docs = snapshot.data?.docs ?? [];
-            final readings =
-                docs.map((doc) => WeatherReading.fromMap(doc.data())).toList()
-                  ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-            final latest = readings.isNotEmpty ? readings.first : null;
-
-            if (latest == null &&
-                !_hasTriggeredFetch &&
-                !_isRefreshing &&
-                snapshot.connectionState != ConnectionState.waiting) {
-              _hasTriggeredFetch = true;
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) _refresh();
-              });
-            }
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Weather',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                    _isRefreshing
-                        ? const Padding(
-                            padding: EdgeInsets.all(8),
-                            child: SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          )
-                        : IconButton(
-                            icon: const Icon(Icons.refresh),
-                            tooltip: 'Fetch latest weather',
-                            onPressed: _refresh,
-                          ),
-                  ],
-                ),
-                if (latest == null)
-                  const Text('No weather data recorded yet.')
-                else ...[
-                  Text(
-                    'Rainfall: ${latest.rainfall1h.toStringAsFixed(1)} mm '
-                    '(1h) / ${latest.rainfall3h.toStringAsFixed(1)} mm (3h)',
-                  ),
-                  Text('Temperature: ${latest.temperature.toStringAsFixed(1)}Â°C'),
-                  Text('Humidity: ${latest.humidity.toStringAsFixed(0)}%'),
-                  Text('Conditions: ${latest.weatherDescription}'),
-                  const SizedBox(height: 4),
-                  Text(
-                    'As of ${_formatTimestamp(latest.timestamp)}',
-                    style: const TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant),
-                  ),
-                ],
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-/// Bar chart of reading counts by status across all sites â€” a quick
-/// health-of-data-pipeline view. Fed from the same top-100 readings stream
-/// that already powers the stat cards above, so it updates live too.
-class _StatusBarChart extends StatelessWidget {
-  const _StatusBarChart({required this.readings});
-
-  final List<Reading> readings;
-
-  @override
-  Widget build(BuildContext context) {
-    final approved = readings
-        .where((r) => r.status.toLowerCase() == 'approved')
-        .length;
-    final pending = readings
-        .where((r) => r.status.toLowerCase() == 'pending')
-        .length;
-    final rejected = readings
-        .where((r) => r.status.toLowerCase() == 'rejected')
-        .length;
-    final maxCount = [
-      approved,
-      pending,
-      rejected,
-    ].reduce((a, b) => a > b ? a : b);
-    const labels = ['Approved', 'Pending', 'Rejected'];
-
-    return SizedBox(
-      height: 160,
-      child: BarChart(
-        BarChartData(
-          alignment: BarChartAlignment.spaceAround,
-          maxY: (maxCount == 0 ? 1 : maxCount).toDouble() * 1.2,
-          gridData: const FlGridData(show: true),
-          borderData: FlBorderData(show: true),
-          titlesData: FlTitlesData(
-            topTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false),
-            ),
-            rightTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false),
-            ),
-            leftTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: true, reservedSize: 28),
-            ),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 28,
-                getTitlesWidget: (value, meta) {
-                  final index = value.toInt();
-                  if (index < 0 || index >= labels.length) {
-                    return const SizedBox.shrink();
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      labels[index],
-                      style: const TextStyle(fontSize: 10),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-          barGroups: [
-            BarChartGroupData(
-              x: 0,
-              barRods: [
-                BarChartRodData(
-                  toY: approved.toDouble(),
-                  color: Colors.green,
-                  width: 24,
-                ),
-              ],
-            ),
-            BarChartGroupData(
-              x: 1,
-              barRods: [
-                BarChartRodData(
-                  toY: pending.toDouble(),
-                  color: Colors.orange,
-                  width: 24,
-                ),
-              ],
-            ),
-            BarChartGroupData(
-              x: 2,
-              barRods: [
-                BarChartRodData(
-                  toY: rejected.toDouble(),
-                  color: Colors.red,
-                  width: 24,
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Pie chart showing the proportion of readings by status across all
-/// sites â€” the same approved/pending/rejected counts as [_StatusBarChart],
-/// just a different view of them.
-class _StatusPieChart extends StatelessWidget {
-  const _StatusPieChart({required this.readings});
-
-  final List<Reading> readings;
-
-  @override
-  Widget build(BuildContext context) {
-    final approved = readings
-        .where((r) => r.status.toLowerCase() == 'approved')
-        .length;
-    final pending = readings
-        .where((r) => r.status.toLowerCase() == 'pending')
-        .length;
-    final rejected = readings
-        .where((r) => r.status.toLowerCase() == 'rejected')
-        .length;
-    final total = approved + pending + rejected;
-
-    if (total == 0) {
-      return const SizedBox(
-        height: 120,
-        child: Center(child: Text('No readings yet')),
-      );
-    }
-
-    const titleStyle = TextStyle(
-      fontSize: 11,
-      fontWeight: FontWeight.bold,
-      color: Colors.white,
-    );
-
-    return Column(
-      children: [
-        SizedBox(
-          height: 160,
-          child: PieChart(
-            PieChartData(
-              sectionsSpace: 2,
-              centerSpaceRadius: 32,
-              sections: [
-                if (approved > 0)
-                  PieChartSectionData(
-                    value: approved.toDouble(),
-                    color: Colors.green,
-                    title: '${(approved / total * 100).round()}%',
-                    radius: 56,
-                    titleStyle: titleStyle,
-                  ),
-                if (pending > 0)
-                  PieChartSectionData(
-                    value: pending.toDouble(),
-                    color: Colors.orange,
-                    title: '${(pending / total * 100).round()}%',
-                    radius: 56,
-                    titleStyle: titleStyle,
-                  ),
-                if (rejected > 0)
-                  PieChartSectionData(
-                    value: rejected.toDouble(),
-                    color: Colors.red,
-                    title: '${(rejected / total * 100).round()}%',
-                    radius: 56,
-                    titleStyle: titleStyle,
-                  ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 12,
-          runSpacing: 4,
-          alignment: WrapAlignment.center,
-          children: [
-            _PieLegendEntry(color: Colors.green, label: 'Approved', count: approved),
-            _PieLegendEntry(color: Colors.orange, label: 'Pending', count: pending),
-            _PieLegendEntry(color: Colors.red, label: 'Rejected', count: rejected),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _PieLegendEntry extends StatelessWidget {
-  const _PieLegendEntry({
-    required this.color,
-    required this.label,
-    required this.count,
-  });
-
-  final Color color;
-  final String label;
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 4),
-        Text('$label ($count)', style: const TextStyle(fontSize: 11)),
-      ],
-    );
-  }
-}
-
-class _SiteLevelEntry {
-  const _SiteLevelEntry(this.site, this.level);
-
-  final Site site;
-  final double level;
-}
-
-/// Horizontal comparison of the latest recorded water level at every site,
-/// so an analyst can see at a glance which sites are currently highest.
-/// Colored per-site relative to that site's own dangerLevel: green well
-/// below it, amber approaching it, red at or above it. Built with plain
-/// widgets rather than fl_chart's BarChart, which in the version pinned by
-/// this project (1.2.0) has no horizontal-orientation option.
-class _AllSitesLevelChart extends StatelessWidget {
-  const _AllSitesLevelChart({required this.sites, required this.allReadings});
-
-  final List<Site> sites;
-  final List<Reading> allReadings;
-
-  @override
-  Widget build(BuildContext context) {
-    // allReadings is already newest-first (the same top-100 stream that
-    // feeds the rest of this dashboard), so the first match per site here
-    // is that site's latest reading with a usable level.
-    final latestBySite = <String, Reading>{};
-    for (final r in allReadings) {
-      final level = r.manualLevel ?? r.aiDetectedLevel;
-      if (level == null) continue;
-      latestBySite.putIfAbsent(r.siteId, () => r);
-    }
-
-    final rows = <_SiteLevelEntry>[];
-    for (final site in sites) {
-      final reading = latestBySite[site.siteId];
-      final level = reading?.manualLevel ?? reading?.aiDetectedLevel;
-      if (level == null) continue;
-      rows.add(_SiteLevelEntry(site, level));
-    }
-    rows.sort((a, b) => b.level.compareTo(a.level));
-
-    if (rows.isEmpty) {
-      return const SizedBox(
-        height: 60,
-        child: Center(child: Text('No recent level readings yet')),
-      );
-    }
-
-    final maxScale = rows.fold<double>(
-      0,
-      (acc, r) => [acc, r.level, r.site.dangerLevel].reduce((a, b) => a > b ? a : b),
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final row in rows)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 90,
-                  child: Text(
-                    row.site.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                Expanded(
-                  child: Builder(
-                    builder: (context) {
-                      final ratio = row.site.dangerLevel > 0
-                          ? row.level / row.site.dangerLevel
-                          : 0.0;
-                      final color = ratio >= 1.0
-                          ? Colors.red
-                          : ratio >= 0.7
-                              ? Colors.amber.shade700
-                              : Colors.green;
-                      final widthFactor = maxScale > 0
-                          ? (row.level / maxScale).clamp(0.0, 1.0)
-                          : 0.0;
-                      return Stack(
-                        children: [
-                          Container(
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          ),
-                          FractionallySizedBox(
-                            widthFactor: widthFactor,
-                            child: Container(
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: color,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 48,
-                  child: Text(
-                    '${row.level.toStringAsFixed(1)}m',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-/// Calendar-heatmap-style view of reading submission activity over the last
-/// 30 days â€” one square per day, darker for more readings that day. Fed
-/// from the same top-100 readings stream as the rest of this dashboard, so
-/// very high-volume days beyond that cap may under-count.
-class _SubmissionHeatmap extends StatelessWidget {
-  const _SubmissionHeatmap({required this.readings});
-
-  final List<Reading> readings;
-
-  @override
-  Widget build(BuildContext context) {
-    final today = DateTime.now();
-    final startDay = DateTime(
-      today.year,
-      today.month,
-      today.day,
-    ).subtract(const Duration(days: 29));
-
-    final countByDay = <DateTime, int>{
-      for (var i = 0; i < 30; i++) startDay.add(Duration(days: i)): 0,
-    };
-    for (final r in readings) {
-      final day = DateTime(
-        r.timestamp.year,
-        r.timestamp.month,
-        r.timestamp.day,
-      );
-      if (countByDay.containsKey(day)) {
-        countByDay[day] = countByDay[day]! + 1;
-      }
-    }
-
-    final maxCount = countByDay.values.fold<int>(
-      0,
-      (a, b) => a > b ? a : b,
-    );
-
-    return Wrap(
-      spacing: 4,
-      runSpacing: 4,
-      children: countByDay.entries.map((entry) {
-        final count = entry.value;
-        final intensity = maxCount == 0 ? 0.0 : count / maxCount;
-        final color = count == 0
-            ? Colors.grey.shade200
-            : Colors.blue.withValues(alpha: 0.25 + 0.75 * intensity);
-
-        return Tooltip(
-          message:
-              '${_formatShortDate(entry.key)}: $count '
-              'reading${count == 1 ? '' : 's'}',
-          child: Container(
-            width: 16,
-            height: 16,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(3),
-            ),
-          ),
-        );
-      }).toList(),
     );
   }
 }
