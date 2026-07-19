@@ -1,9 +1,9 @@
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
 import '../../models/site_model.dart';
+import '../satellite_overlay_screen.dart';
 import 'qr_scan_screen.dart';
 
 class SitePickerScreen extends StatelessWidget {
@@ -147,6 +147,46 @@ class _SiteCard extends StatelessWidget {
     );
   }
 
+  void _showOptions(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.qr_code_scanner, color: Colors.blue),
+                title: const Text('Submit Reading (Geofence & QR)'),
+                subtitle: const Text('Physically visit the site to record level'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _openQrScan(context);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.satellite_alt, color: Colors.purple),
+                title: const Text('View Satellite Overlay & Flood Risk'),
+                subtitle: const Text('Remote monitoring via orbital telemetry'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => SatelliteOverlayScreen(siteId: site.siteId),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -154,7 +194,7 @@ class _SiteCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: InkWell(
-        onTap: () => _openQrScan(context),
+        onTap: () => _showOptions(context),
         borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
         child: Padding(
           padding: const EdgeInsets.all(16),

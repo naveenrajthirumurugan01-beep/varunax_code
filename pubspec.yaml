@@ -49,6 +49,8 @@ dependencies:
   onnxruntime: ^1.4.1
   image: ^4.9.1
   fl_chart: ^1.2.0
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.0
   firebase_messaging: ^16.4.3
   flutter_local_notifications: ^22.0.1
   googleapis_auth: ^1.6.0
@@ -85,7 +87,6 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/models/water_segmentation.onnx
-    - assets/service_account.json
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
