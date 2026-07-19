@@ -455,6 +455,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
     // so there's no case here where falling back to the AI-detected value is
     // reachable â€” dart's null-safety already proves that invariant.
     final isAlert = level >= widget.site.dangerLevel;
+    final warningLevel = Reading.calculateWarningLevel(
+      level,
+      widget.site.dangerLevel,
+    );
 
     // Fire-and-forget: accumulates a paired rainfall/water-level dataset for
     // a future flood prediction model, but must never block or fail the
@@ -499,6 +503,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
           waterQualityStatus: _waterQualityAssessment?.status,
           isSubmerged: _isSubmerged,
           isBlurryOrDark: _isBlurryOrDark,
+          warningLevel: warningLevel,
         );
 
         await SyncService().saveReadingOffline(offlineReading, photo.path);
@@ -562,6 +567,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         waterQualityStatus: _waterQualityAssessment?.status,
         isSubmerged: _isSubmerged,
         isBlurryOrDark: _isBlurryOrDark,
+        warningLevel: warningLevel,
       );
 
       await readingRef.set(reading.toMap());
@@ -581,6 +587,17 @@ class _CaptureScreenState extends State<CaptureScreen> {
         // itself, so no new data needs to be threaded through this screen.
         unawaited(
           CascadeAlertService().checkAndTriggerCascade(widget.site.siteId),
+        );
+      } else if (warningLevel == 'yellow' || warningLevel == 'orange') {
+        // Fire-and-forget early warning — red/isAlert already covered by
+        // sendAlertPush above, so this only ever fires for yellow/orange.
+        unawaited(
+          PushSenderService().sendWarningPush(
+            widget.site.name,
+            level,
+            widget.site.dangerLevel,
+            warningLevel!,
+          ),
         );
       }
 
@@ -699,6 +716,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Widget _buildGaugeSection() {
     final textTheme = Theme.of(context).textTheme;
     final l10n = AppLocalizations.of(context)!;
+    final currentLevel = _parsedLevel;
+    final currentWarningLevel = Reading.calculateWarningLevel(
+      currentLevel,
+      widget.site.dangerLevel,
+    );
 
     return Card(
       child: Padding(
@@ -865,18 +887,58 @@ class _CaptureScreenState extends State<CaptureScreen> {
               ],
             ],
             const SizedBox(height: 12),
-            Text(
-              '${l10n.dangerLevel}: ${widget.site.dangerLevel} m',
-              style: TextStyle(
-                color: AppColors.error,
-                fontWeight: FontWeight.bold,
-              ),
+            _buildDangerLevelIndicator(
+              l10n.dangerLevel,
+              currentLevel,
+              currentWarningLevel,
             ),
             const SizedBox(height: 12),
             _buildGeofenceSection(),
           ],
         ),
       ),
+    );
+  }
+
+  // Below 80% of dangerLevel (warningLevel null): unchanged plain
+  // "Danger Level: Xm" line. Yellow/orange/red: color-coded indicator
+  // comparing the currently-typed level against the threshold.
+  Widget _buildDangerLevelIndicator(
+    String dangerLevelLabel,
+    double? currentLevel,
+    String? warningLevel,
+  ) {
+    if (warningLevel == null || currentLevel == null) {
+      return Text(
+        '$dangerLevelLabel: ${widget.site.dangerLevel} m',
+        style: TextStyle(color: AppColors.error, fontWeight: FontWeight.bold),
+      );
+    }
+
+    final String emoji;
+    final String label;
+    final Color color;
+    switch (warningLevel) {
+      case 'yellow':
+        emoji = '🟡';
+        label = 'Approaching danger';
+        color = Colors.amber.shade800;
+        break;
+      case 'orange':
+        emoji = '🟠';
+        label = 'Near danger level';
+        color = Colors.orange.shade800;
+        break;
+      default:
+        emoji = '🔴';
+        label = 'DANGER EXCEEDED';
+        color = Colors.red.shade700;
+    }
+
+    return Text(
+      '$emoji $label — ${currentLevel.toStringAsFixed(1)}m / '
+      '${widget.site.dangerLevel}m',
+      style: TextStyle(color: color, fontWeight: FontWeight.bold),
     );
   }
 

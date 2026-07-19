@@ -71,6 +71,56 @@ class PushSenderService {
     }
   }
 
+  /// Looks up every supervisor/analyst's FCM token and pushes a yellow/
+  /// orange early-warning notification to each of them — the same
+  /// audience as [sendAlertPush], but for a reading that hasn't reached
+  /// the red/isAlert threshold yet. Never throws — a failed push must not
+  /// block or fail the reading submission that triggered it.
+  Future<void> sendWarningPush(
+    String siteName,
+    double level,
+    double dangerLevel,
+    String warningLevel,
+  ) async {
+    try {
+      final usersSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where('role', whereIn: ['supervisor', 'analyst'])
+          .get();
+
+      final String title;
+      final String body;
+      switch (warningLevel) {
+        case 'yellow':
+          title = '🟡 Yellow Alert — $siteName';
+          body =
+              'Water level at ${level}m — approaching danger threshold of '
+              '${dangerLevel}m (80% of limit)';
+          break;
+        case 'orange':
+          title = '🟠 Orange Alert — $siteName';
+          body =
+              'Water level at ${level}m — near danger threshold of '
+              '${dangerLevel}m (95% of limit)';
+          break;
+        default:
+          // Only 'yellow'/'orange' should ever reach this method — bail
+          // out rather than send a notification with an unexpected label.
+          return;
+      }
+
+      final client = await _getClient();
+      for (final userDoc in usersSnapshot.docs) {
+        final token = userDoc.data()['fcmToken'] as String?;
+        if (token == null || token.isEmpty) continue;
+
+        await _sendToToken(client, userDoc.reference, token, body, title: title);
+      }
+    } catch (e) {
+      debugPrint('PushSenderService.sendWarningPush failed: $e');
+    }
+  }
+
   /// Looks up the rejecting reading's field officer's FCM token and pushes
   /// a rejection notification to them. Never throws — a failed push must
   /// not block or fail the reject action that triggered it.

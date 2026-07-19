@@ -15,6 +15,10 @@ class Reading {
   final String? waterQualityStatus;
   final bool isSubmerged;
   final bool isBlurryOrDark;
+  // Finer-grained companion to isAlert — null (no warning), 'yellow',
+  // 'orange', or 'red' ('red' is the same condition as isAlert == true).
+  // isAlert itself is untouched and keeps driving existing alert logic.
+  final String? warningLevel;
 
   Reading({
     required this.readingId,
@@ -33,7 +37,19 @@ class Reading {
     this.waterQualityStatus,
     this.isSubmerged = false,
     this.isBlurryOrDark = false,
+    this.warningLevel,
   });
+
+  // Returns null (no warning — below 80% of dangerLevel, or level is
+  // unavailable), 'yellow' (80%–95%), 'orange' (95%–100%), or 'red' (at or
+  // above dangerLevel — the same condition as isAlert == true).
+  static String? calculateWarningLevel(double? level, double dangerLevel) {
+    if (level == null) return null;
+    if (level >= dangerLevel) return 'red';
+    if (level >= dangerLevel * 0.95) return 'orange';
+    if (level >= dangerLevel * 0.80) return 'yellow';
+    return null;
+  }
 
   factory Reading.fromMap(Map<String, dynamic> map) {
     return Reading(
@@ -55,6 +71,7 @@ class Reading {
       waterQualityStatus: map['waterQualityStatus'] as String?,
       isSubmerged: map['isSubmerged'] as bool? ?? false,
       isBlurryOrDark: map['isBlurryOrDark'] as bool? ?? false,
+      warningLevel: map['warningLevel'] as String?,
     );
   }
 
@@ -76,6 +93,7 @@ class Reading {
       'waterQualityStatus': waterQualityStatus,
       'isSubmerged': isSubmerged,
       'isBlurryOrDark': isBlurryOrDark,
+      'warningLevel': warningLevel,
     };
   }
 }

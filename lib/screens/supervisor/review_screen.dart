@@ -425,7 +425,15 @@ class _ReadingCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            _SiteNameLabel(siteId: reading.siteId),
+            Row(
+              children: [
+                Expanded(child: _SiteNameLabel(siteId: reading.siteId)),
+                if (reading.warningLevel != null) ...[
+                  const SizedBox(width: 8),
+                  _WarningLevelBadge(warningLevel: reading.warningLevel!),
+                ],
+              ],
+            ),
             const SizedBox(height: 4),
             _SubmitterLabel(
               uid: reading.submittedBy,
@@ -773,6 +781,71 @@ class _ComparisonCell extends StatelessWidget {
 /// Small colored pill showing a reading's water-quality classification
 /// (from PhDetectionService.classifyWaterQuality, stored on the reading as
 /// Reading.waterQualityStatus) alongside its pH value.
+/// 3-level early-warning companion to isAlert — 'yellow'/'orange'/'red'
+/// (never shown for null, the normal/no-warning case).
+class _WarningLevelBadge extends StatelessWidget {
+  const _WarningLevelBadge({required this.warningLevel});
+
+  final String warningLevel;
+
+  Color get _color {
+    switch (warningLevel) {
+      case 'yellow':
+        return Colors.amber.shade700;
+      case 'orange':
+        return Colors.orange;
+      case 'red':
+      default:
+        return Colors.red;
+    }
+  }
+
+  String get _emoji {
+    switch (warningLevel) {
+      case 'yellow':
+        return '🟡';
+      case 'orange':
+        return '🟠';
+      case 'red':
+      default:
+        return '🔴';
+    }
+  }
+
+  String get _label {
+    switch (warningLevel) {
+      case 'yellow':
+        return 'Yellow';
+      case 'orange':
+        return 'Orange';
+      case 'red':
+      default:
+        return 'Red';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _color;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+        border: Border.all(color: color),
+      ),
+      child: Text(
+        '$_emoji $_label',
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+        ),
+      ),
+    );
+  }
+}
+
 class _WaterQualityBadge extends StatelessWidget {
   const _WaterQualityBadge({required this.status});
 

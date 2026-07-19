@@ -85,6 +85,23 @@ String generateReadingSummary(
     );
   }
 
+  // Companion to (not a replacement for) the isAlert check below — 'red'
+  // is the same condition as isAlert == true, so only yellow/orange add a
+  // sentence here; the existing alert sentence is untouched.
+  switch (reading.warningLevel) {
+    case 'yellow':
+      sentences.add(
+        'Water level is approaching the danger threshold (80% of limit).',
+      );
+      break;
+    case 'orange':
+      sentences.add(
+        'Water level is near the danger threshold (95% of limit). '
+        'Immediate monitoring recommended.',
+      );
+      break;
+  }
+
   if (reading.isAlert) {
     sentences.add('This reading triggered a danger-level alert.');
   }

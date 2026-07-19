@@ -11,12 +11,23 @@ import '../core/theme.dart';
 /// the affected site itself. Renders nothing at all when there are no
 /// active warnings, rather than an empty-state placeholder.
 class CascadeRiskBanner extends StatelessWidget {
-  const CascadeRiskBanner({super.key, this.compact = false});
+  const CascadeRiskBanner({
+    super.key,
+    this.compact = false,
+    this.onViewRecommendations,
+  });
 
   /// Smaller text/padding for review_screen.dart, where this sits above an
   /// already-dense reading queue rather than at the top of a full
   /// dashboard.
   final bool compact;
+
+  /// When non-null, shows a "See release recommendations below" tappable
+  /// link at the bottom of the banner — used only by the analyst
+  /// dashboard, which has a Coordinated Release Recommendations section to
+  /// link to. Left null everywhere else (e.g. review_screen.dart's
+  /// supervisor-facing usage), so the link simply doesn't render there.
+  final VoidCallback? onViewRecommendations;
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +71,22 @@ class CascadeRiskBanner extends StatelessWidget {
               SizedBox(height: compact ? 4 : 6),
               for (final doc in docs)
                 _CascadeWarningCard(data: doc.data(), compact: compact),
+              if (onViewRecommendations != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: InkWell(
+                    onTap: onViewRecommendations,
+                    child: Text(
+                      'See release recommendations below',
+                      style: TextStyle(
+                        fontSize: compact ? 11 : 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.orange.shade900,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );

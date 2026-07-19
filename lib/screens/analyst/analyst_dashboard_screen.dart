@@ -1,4 +1,4 @@
-﻿import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
@@ -27,6 +27,34 @@ Color _statusColor(String status) {
     case 'pending':
     default:
       return Colors.orange;
+  }
+}
+
+// Reading.warningLevel is a companion to isAlert, not a replacement —
+// 'red' here is the exact same condition as isAlert == true. Returns null
+// (caller falls back to the normal text color) when there's no warning.
+Color? _warningLevelColor(String? warningLevel) {
+  switch (warningLevel) {
+    case 'yellow':
+      return Colors.amber.shade800;
+    case 'orange':
+      return Colors.orange.shade800;
+    case 'red':
+      return Colors.red.shade700;
+    default:
+      return null;
+  }
+}
+
+String _warningLevelEmoji(String warningLevel) {
+  switch (warningLevel) {
+    case 'yellow':
+      return '🟡';
+    case 'orange':
+      return '🟠';
+    case 'red':
+    default:
+      return '🔴';
   }
 }
 
@@ -69,6 +97,18 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
 
   final Set<String> _seenAlertIds = {};
   bool _alertsInitialized = false;
+  final _releaseRecommendationsSectionKey = GlobalKey();
+
+  void _scrollToReleaseRecommendations() {
+    final recommendationsContext =
+        _releaseRecommendationsSectionKey.currentContext;
+    if (recommendationsContext == null) return;
+    Scrollable.ensureVisible(
+      recommendationsContext,
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOut,
+    );
+  }
 
   Future<void> _logout(BuildContext context) async {
     await AuthService().signOut();
@@ -170,10 +210,8 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
             final alertReadings =
                 alertDocs
                     .map(
-                      (doc) => Reading.fromMap({
-                        ...doc.data(),
-                        'readingId': doc.id,
-                      }),
+                      (doc) =>
+                          Reading.fromMap({...doc.data(), 'readingId': doc.id}),
                     )
                     .toList()
                   ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
@@ -239,7 +277,10 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                         // — sits above everything else, including the
                         // welcome header, and renders nothing when there
                         // are no active warnings.
-                        const CascadeRiskBanner(),
+                        CascadeRiskBanner(
+                          onViewRecommendations:
+                              _scrollToReleaseRecommendations,
+                        ),
                         _WelcomeHeader(uid: uid, email: user?.email),
                         // Alerts are safety-critical, so they stay visible
                         // regardless of which tab is active below.
@@ -247,11 +288,17 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                           readings: alertReadings,
                           siteById: siteById,
                         ),
+                        // Also safety-critical and also always visible
+                        // regardless of tab — renders nothing when there
+                        // are no active cascade warnings (same condition
+                        // as CascadeRiskBanner above).
+                        _ReleaseRecommendationsSection(
+                          key: _releaseRecommendationsSectionKey,
+                          sites: sites,
+                          allReadings: readings,
+                        ),
                         if (_activeTab == _DashboardTab.overview) ...[
-                          _StatsRow(
-                            readings: readings,
-                            alertCount: alertReadings.length,
-                          ),
+                          _StatsRow(readings: readings),
                           const SizedBox(height: 8),
                           _TrendChartsSection(
                             sites: sites,
@@ -346,9 +393,7 @@ class _AnalystDashboardScreenState extends State<AnalystDashboardScreen> {
                   // state, same setState call, just triggered from a bottom
                   // nav bar per the design instead of a top toggle.
                   bottomNavigationBar: BottomNavigationBar(
-                    currentIndex: _activeTab == _DashboardTab.overview
-                        ? 0
-                        : 1,
+                    currentIndex: _activeTab == _DashboardTab.overview ? 0 : 1,
                     // Citizen Reports (index 2) is a separate full-screen
                     // push, same as History already was on the supervisor
                     // home screen's bottom nav — it doesn't change
@@ -416,10 +461,7 @@ class _RangeToggleState extends State<_RangeToggle> {
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          _rangePill('24h', 0),
-          _rangePill('7d', 1),
-        ],
+        children: [_rangePill('24h', 0), _rangePill('7d', 1)],
       ),
     );
   }
@@ -543,11 +585,252 @@ class _AlertBannerRow extends StatelessWidget {
   }
 }
 
+// Demo-only hardcoded river connections for the release-safety check
+// below — deliberately independent of Site.downstreamSiteIds (which drives
+// the separate cascade-warning feature and has a different real basin
+// topology). Matched by case-insensitive substring against Site.name
+// rather than exact equality, since the actual seeded/demo site names
+// don't always match these short keys exactly (e.g. the seeded KRS site
+// is named "Krishna Raja Sagara (KRS) Dam").
+const List<({String upstreamKey, String? downstreamKey})>
+_demoReleaseChain = [
+  (upstreamKey: 'krishna raja sagara', downstreamKey: 'mettur dam'),
+  (upstreamKey: 'mettur dam', downstreamKey: 'test site'),
+  (upstreamKey: 'test site', downstreamKey: null), // river mouth
+];
+
+String? _demoDownstreamKeyFor(String siteName) {
+  final lower = siteName.toLowerCase();
+  for (final link in _demoReleaseChain) {
+    if (lower.contains(link.upstreamKey)) return link.downstreamKey;
+  }
+  return null;
+}
+
+Site? _findSiteByNameKey(List<Site> sites, String key) {
+  for (final s in sites) {
+    if (s.name.toLowerCase().contains(key)) return s;
+  }
+  return null;
+}
+
+/// "Coordinated Release Recommendations" — for every site currently above
+/// its own danger level, checks the (demo-hardcoded) downstream site on
+/// the same river network and flags whether an upstream release would be
+/// safe: RELEASE SAFE if the downstream site still has headroom, DO NOT
+/// RELEASE if the downstream site is itself already above danger. Pure
+/// client-side computation over the sites/readings this dashboard already
+/// fetches — no new Firestore query. Renders nothing when no site is
+/// currently above danger, same "renders nothing when empty" convention
+/// used by CascadeRiskBanner.
+class _ReleaseRecommendationsSection extends StatelessWidget {
+  const _ReleaseRecommendationsSection({
+    super.key,
+    required this.sites,
+    required this.allReadings,
+  });
+
+  final List<Site> sites;
+  final List<Reading> allReadings;
+
+  @override
+  Widget build(BuildContext context) {
+    final readingsBySite = <String, List<Reading>>{};
+    for (final r in allReadings) {
+      final level = r.manualLevel ?? r.aiDetectedLevel;
+      if (level == null) continue;
+      (readingsBySite[r.siteId] ??= []).add(r);
+    }
+    // allReadings is already newest-first (see the outer readings query's
+    // orderBy('timestamp', descending: true)), so the first entry per site
+    // is its latest reading.
+    double? latestLevelFor(String siteId) {
+      final siteReadings = readingsBySite[siteId];
+      if (siteReadings == null || siteReadings.isEmpty) return null;
+      return siteReadings.first.manualLevel ?? siteReadings.first.aiDetectedLevel;
+    }
+
+    final cards = <Widget>[];
+    for (final site in sites) {
+      final level = latestLevelFor(site.siteId);
+      if (level == null || level < site.dangerLevel) continue;
+
+      final downstreamKey = _demoDownstreamKeyFor(site.name);
+      Site? downstreamSite;
+      double? downstreamLevel;
+      if (downstreamKey != null) {
+        downstreamSite = _findSiteByNameKey(sites, downstreamKey);
+        if (downstreamSite != null) {
+          downstreamLevel = latestLevelFor(downstreamSite.siteId);
+        }
+      }
+
+      cards.add(
+        _ReleaseSafetyCard(
+          key: ValueKey(site.siteId),
+          site: site,
+          currentLevel: level,
+          downstreamSite: downstreamSite,
+          downstreamLevel: downstreamLevel,
+        ),
+      );
+    }
+
+    if (cards.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Coordinated Release Recommendations',
+            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final card in cards) ...[
+                  card,
+                  const SizedBox(width: 12),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Decision-support only — all release decisions must be made by '
+            'authorized dam operators following CWC protocols. This system '
+            'does not control any physical infrastructure.',
+            style: TextStyle(
+              fontSize: 10,
+              fontStyle: FontStyle.italic,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReleaseSafetyCard extends StatelessWidget {
+  const _ReleaseSafetyCard({
+    super.key,
+    required this.site,
+    required this.currentLevel,
+    required this.downstreamSite,
+    required this.downstreamLevel,
+  });
+
+  final Site site;
+  final double currentLevel;
+  final Site? downstreamSite;
+  final double? downstreamLevel;
+
+  bool get _releaseSafe {
+    // No downstream site at all (river mouth) — nothing to flood, so a
+    // release is safe by default.
+    if (downstreamSite == null || downstreamLevel == null) return true;
+    return downstreamLevel! < downstreamSite!.dangerLevel;
+  }
+
+  String get _reason {
+    if (downstreamSite == null || downstreamLevel == null) {
+      return 'No downstream site — this is the river mouth. Release is safe.';
+    }
+    if (downstreamLevel! >= downstreamSite!.dangerLevel) {
+      return 'Downstream ${downstreamSite!.name} is at '
+          '${downstreamLevel!.toStringAsFixed(1)}m — already above danger';
+    }
+    return 'Downstream is safe — current level '
+        '${downstreamLevel!.toStringAsFixed(1)}m below danger '
+        '${downstreamSite!.dangerLevel.toStringAsFixed(1)}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final safe = _releaseSafe;
+    final color = safe ? Colors.green : Colors.red;
+
+    return Container(
+      width: 240,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
+        border: Border(left: BorderSide(color: color, width: 4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              site.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '${currentLevel.toStringAsFixed(1)}m vs danger '
+              '${site.dangerLevel.toStringAsFixed(1)}m',
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 3,
+              ),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+                border: Border.all(color: color),
+              ),
+              child: Text(
+                safe ? 'RELEASE SAFE' : 'DO NOT RELEASE',
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _reason,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF1A1A1A)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _StatsRow extends StatelessWidget {
-  const _StatsRow({required this.readings, required this.alertCount});
+  const _StatsRow({required this.readings});
 
   final List<Reading> readings;
-  final int alertCount;
 
   @override
   Widget build(BuildContext context) {
@@ -584,12 +867,7 @@ class _StatsRow extends StatelessWidget {
             value: readings.length,
             color: Colors.blue,
           ),
-          _StatCard(
-            label: 'Danger Level',
-            value: alertCount,
-            color: AppColors.error,
-            icon: Icons.warning_amber_rounded,
-          ),
+          _WarningBreakdownCard(readings: readings),
           _StatCard(
             label: 'Pending Review',
             value: pendingCount,
@@ -611,13 +889,11 @@ class _StatCard extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
-    this.icon,
   });
 
   final String label;
   final int value;
   final Color color;
-  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
@@ -631,10 +907,6 @@ class _StatCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (icon != null) ...[
-                  Icon(icon, color: color, size: 18),
-                  const SizedBox(width: 4),
-                ],
                 Text(
                   '$value',
                   style: TextStyle(
@@ -658,6 +930,104 @@ class _StatCard extends StatelessWidget {
   }
 }
 
+/// Replaces the old single-number "Danger Level" stat card — breaks the
+/// count down by 3-level warning (red/orange/yellow) among readings from
+/// the last 24 hours, using the same already-fetched readings list rather
+/// than a new query. Reading.warningLevel is a companion to isAlert, not a
+/// replacement, so 'red' here corresponds exactly to isAlert == true.
+class _WarningBreakdownCard extends StatelessWidget {
+  const _WarningBreakdownCard({required this.readings});
+
+  final List<Reading> readings;
+
+  @override
+  Widget build(BuildContext context) {
+    final cutoff = DateTime.now().subtract(const Duration(hours: 24));
+    final recent = readings.where((r) => r.timestamp.isAfter(cutoff));
+    final redCount = recent.where((r) => r.warningLevel == 'red').length;
+    final orangeCount = recent.where((r) => r.warningLevel == 'orange').length;
+    final yellowCount = recent.where((r) => r.warningLevel == 'yellow').length;
+
+    return Card(
+      color: AppColors.error.withValues(alpha: 0.1),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  color: AppColors.error,
+                  size: 16,
+                ),
+                const SizedBox(width: 4),
+                const Text(
+                  'Danger Level',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _WarningCountChip(
+                  emoji: '🔴',
+                  count: redCount,
+                  color: Colors.red,
+                ),
+                _WarningCountChip(
+                  emoji: '🟠',
+                  count: orangeCount,
+                  color: Colors.orange,
+                ),
+                _WarningCountChip(
+                  emoji: '🟡',
+                  count: yellowCount,
+                  color: Colors.amber.shade700,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WarningCountChip extends StatelessWidget {
+  const _WarningCountChip({
+    required this.emoji,
+    required this.count,
+    required this.color,
+  });
+
+  final String emoji;
+  final int count;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(emoji, style: const TextStyle(fontSize: 13)),
+        Text(
+          '$count',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _WelcomeHeader extends StatelessWidget {
   const _WelcomeHeader({required this.uid, required this.email});
 
@@ -669,7 +1039,10 @@ class _WelcomeHeader extends StatelessWidget {
     if (uid == null) return const SizedBox.shrink();
 
     return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .snapshots(),
       builder: (context, snapshot) {
         final userData = snapshot.data?.data() as Map<String, dynamic>?;
         final userName = userData?['name'] ?? email ?? 'Analyst';
@@ -688,7 +1061,11 @@ class _WelcomeHeader extends StatelessWidget {
                   CircleAvatar(
                     radius: 20,
                     backgroundColor: Colors.blue.shade50,
-                    child: Icon(Icons.analytics, size: 22, color: Colors.blue.shade600),
+                    child: Icon(
+                      Icons.analytics,
+                      size: 22,
+                      color: Colors.blue.shade600,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -879,16 +1256,21 @@ class _ReadingCard extends StatelessWidget {
                     flex: 3,
                     child: Text(
                       _formatTimestamp(reading.timestamp),
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF1A1A1A),
+                      ),
                     ),
                   ),
                   Expanded(
                     flex: 2,
                     child: Text(
                       level != null ? '${level.toStringAsFixed(1)}m' : '—',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1A1A1A),
+                        color:
+                            _warningLevelColor(reading.warningLevel) ??
+                            const Color(0xFF1A1A1A),
                       ),
                     ),
                   ),
@@ -921,6 +1303,26 @@ class _ReadingCard extends StatelessWidget {
                   ),
                 ],
               ),
+              if (reading.warningLevel != null) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      _warningLevelEmoji(reading.warningLevel!),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      reading.warningLevel!.toUpperCase(),
+                      style: TextStyle(
+                        color: _warningLevelColor(reading.warningLevel),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               if (reading.isSubmerged) ...[
                 const SizedBox(height: 4),
                 const Row(
@@ -1000,8 +1402,9 @@ class _ReadingDetailDialog extends StatelessWidget {
                     Expanded(
                       child: Text(
                         siteIdText,
-                        style: Theme.of(context).textTheme.titleLarge
-                            ?.copyWith(color: const Color(0xFF000000)),
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: const Color(0xFF000000),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1051,9 +1454,7 @@ class _ReadingDetailDialog extends StatelessWidget {
                             if (progress == null) return child;
                             return const SizedBox(
                               height: 160,
-                              child: Center(
-                                child: CircularProgressIndicator(),
-                              ),
+                              child: Center(child: CircularProgressIndicator()),
                             );
                           },
                         ),
@@ -1159,7 +1560,9 @@ class _ReadingDetailDialog extends StatelessWidget {
                             children: [
                               Text(
                                 reading.phLevel!.toStringAsFixed(1),
-                                style: const TextStyle(color: Color(0xFF1A1A1A)),
+                                style: const TextStyle(
+                                  color: Color(0xFF1A1A1A),
+                                ),
                               ),
                               if (reading.waterQualityStatus != null) ...[
                                 const SizedBox(width: 8),
@@ -1285,7 +1688,10 @@ class _DetailRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Text(value, style: const TextStyle(color: Color(0xFF1A1A1A))),
+            child: Text(
+              value,
+              style: const TextStyle(color: Color(0xFF1A1A1A)),
+            ),
           ),
         ],
       ),
@@ -1417,7 +1823,10 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
                   const SizedBox(height: 8),
                   const Text(
                     'Site',
-                    style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.onSurfaceVariant,
+                    ),
                   ),
                   DropdownButton<String>(
                     value: selectedSiteId,
@@ -1447,9 +1856,25 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
             ),
           ),
           const SizedBox(height: 16),
+          _RainfallVsLevelChart(
+            key: ValueKey('rainfall_$selectedSiteId'),
+            site: selectedSite,
+            allReadings: widget.allReadings,
+          ),
+          const SizedBox(height: 16),
           _WeatherSection(
             key: ValueKey('weather_$selectedSiteId'),
             site: selectedSite,
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'State-wise Overview',
+            style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          _StateWiseOverviewSection(
+            sites: widget.sites,
+            allReadings: widget.allReadings,
           ),
           const SizedBox(height: 16),
           const Text(
@@ -1457,7 +1882,10 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
             style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
-          _AllSitesLevelChart(sites: widget.sites, allReadings: widget.allReadings),
+          _AllSitesLevelChart(
+            sites: widget.sites,
+            allReadings: widget.allReadings,
+          ),
           const SizedBox(height: 16),
           const Text(
             'Reading Status — all sites',
@@ -1485,7 +1913,11 @@ class _TrendChartsSectionState extends State<_TrendChartsSection> {
 /// available history if the site has less than that), with a dashed red
 /// reference line at the site's danger level.
 class _SiteTrendLineChart extends StatelessWidget {
-  const _SiteTrendLineChart({super.key, required this.siteId, required this.site});
+  const _SiteTrendLineChart({
+    super.key,
+    required this.siteId,
+    required this.site,
+  });
 
   final String siteId;
   final Site site;
@@ -1536,7 +1968,9 @@ class _SiteTrendLineChart extends StatelessWidget {
           final level = r.manualLevel ?? r.aiDetectedLevel;
           if (level == null) continue;
           if (r.timestamp.isBefore(cutoff)) continue;
-          spots.add(FlSpot(r.timestamp.millisecondsSinceEpoch.toDouble(), level));
+          spots.add(
+            FlSpot(r.timestamp.millisecondsSinceEpoch.toDouble(), level),
+          );
         }
 
         if (spots.length < 2) {
@@ -1549,12 +1983,14 @@ class _SiteTrendLineChart extends StatelessWidget {
         final minX = spots.first.x;
         final maxX = spots.last.x;
         final dataValues = spots.map((s) => s.y).toList();
-        final lowest = [...dataValues, site.dangerLevel].reduce(
-          (a, b) => a < b ? a : b,
-        );
-        final highest = [...dataValues, site.dangerLevel].reduce(
-          (a, b) => a > b ? a : b,
-        );
+        final lowest = [
+          ...dataValues,
+          site.dangerLevel,
+        ].reduce((a, b) => a < b ? a : b);
+        final highest = [
+          ...dataValues,
+          site.dangerLevel,
+        ].reduce((a, b) => a > b ? a : b);
         final xRange = maxX - minX;
         final xInterval = xRange > 0 ? xRange / 4 : 1.0;
 
@@ -1653,6 +2089,325 @@ class _SiteTrendLineChart extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Feature 4 — dual-axis chart comparing the selected site's water level
+/// trend (left axis, meters) against its rainfall history (right axis,
+/// mm) over the last 24 hours. Level data is filtered client-side from
+/// the already-fetched [allReadings] (no new query, per spec); rainfall
+/// is the one new StreamBuilder this feature is explicitly allowed to add
+/// (weather_data, an existing collection already written by
+/// WeatherService).
+///
+/// fl_chart has no native dual-axis support, so the rainfall series is
+/// linearly remapped onto the level axis's Y-range purely for plotting;
+/// the right-axis tick labels reverse that mapping back to real mm
+/// values so they still read correctly.
+class _RainfallVsLevelChart extends StatelessWidget {
+  const _RainfallVsLevelChart({
+    super.key,
+    required this.site,
+    required this.allReadings,
+  });
+
+  final Site site;
+  final List<Reading> allReadings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Rainfall vs Water Level — ${site.name}',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF000000),
+              ),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              // The only new Firestore query added for this feature — see
+              // the class doc above.
+              stream: FirebaseFirestore.instance
+                  .collection('weather_data')
+                  .where('siteId', isEqualTo: site.siteId)
+                  .orderBy('timestamp', descending: true)
+                  .limit(24)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: Text(
+                        'Failed to load rainfall data: ${snapshot.error}',
+                        style: const TextStyle(color: Color(0xFF1A1A1A)),
+                      ),
+                    ),
+                  );
+                }
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+
+                final cutoff = DateTime.now().subtract(
+                  const Duration(hours: 24),
+                );
+
+                final weatherReadings =
+                    (snapshot.data?.docs ?? [])
+                        .map((doc) => WeatherReading.fromMap(doc.data()))
+                        .where((w) => w.timestamp.isAfter(cutoff))
+                        .toList()
+                      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+                final levelReadings =
+                    allReadings
+                        .where((r) => r.siteId == site.siteId)
+                        .where((r) => r.timestamp.isAfter(cutoff))
+                        .where(
+                          (r) => (r.manualLevel ?? r.aiDetectedLevel) != null,
+                        )
+                        .toList()
+                      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+                if (levelReadings.length < 2 || weatherReadings.length < 2) {
+                  return const SizedBox(
+                    height: 120,
+                    child: Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          'Insufficient data to show correlation — submit '
+                          'more readings to enable this chart',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Color(0xFF1A1A1A)),
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
+                final levelSpots = [
+                  for (final r in levelReadings)
+                    FlSpot(
+                      r.timestamp.millisecondsSinceEpoch.toDouble(),
+                      (r.manualLevel ?? r.aiDetectedLevel)!,
+                    ),
+                ];
+                final rainfallSpots = [
+                  for (final w in weatherReadings)
+                    FlSpot(
+                      w.timestamp.millisecondsSinceEpoch.toDouble(),
+                      w.rainfall1h,
+                    ),
+                ];
+
+                final levelValues = levelSpots.map((s) => s.y).toList();
+                final minLevel = [
+                  ...levelValues,
+                  site.dangerLevel,
+                ].reduce((a, b) => a < b ? a : b);
+                final maxLevel = [
+                  ...levelValues,
+                  site.dangerLevel,
+                ].reduce((a, b) => a > b ? a : b);
+                final levelLow = minLevel - 0.5;
+                final levelHigh = maxLevel + 0.5;
+
+                final rainfallValues = rainfallSpots.map((s) => s.y).toList();
+                final minRain = rainfallValues.reduce((a, b) => a < b ? a : b);
+                final maxRain = rainfallValues.reduce((a, b) => a > b ? a : b);
+                // Guards against a divide-by-zero below when rainfall is
+                // completely flat across the whole window.
+                final rainRange = (maxRain - minRain) == 0
+                    ? 1.0
+                    : (maxRain - minRain);
+
+                double rainToLevelScale(double rainMm) {
+                  return levelLow +
+                      (rainMm - minRain) / rainRange * (levelHigh - levelLow);
+                }
+
+                double levelToRainScale(double levelValue) {
+                  return minRain +
+                      (levelValue - levelLow) /
+                          (levelHigh - levelLow) *
+                          rainRange;
+                }
+
+                final scaledRainfallSpots = [
+                  for (final s in rainfallSpots)
+                    FlSpot(s.x, rainToLevelScale(s.y)),
+                ];
+
+                final allX = [
+                  ...levelSpots,
+                  ...scaledRainfallSpots,
+                ].map((s) => s.x).toList();
+                final minX = allX.reduce((a, b) => a < b ? a : b);
+                final maxX = allX.reduce((a, b) => a > b ? a : b);
+                final xRange = maxX - minX;
+                final xInterval = xRange > 0 ? xRange / 4 : 1.0;
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      height: 220,
+                      child: LineChart(
+                        LineChartData(
+                          minX: minX,
+                          maxX: maxX,
+                          minY: levelLow,
+                          maxY: levelHigh,
+                          gridData: const FlGridData(show: true),
+                          borderData: FlBorderData(show: true),
+                          titlesData: FlTitlesData(
+                            topTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false),
+                            ),
+                            leftTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                reservedSize: 36,
+                                getTitlesWidget: (value, meta) => Text(
+                                  '${value.toStringAsFixed(1)}m',
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.blue,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            rightTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                reservedSize: 40,
+                                getTitlesWidget: (value, meta) => Text(
+                                  '${levelToRainScale(value).toStringAsFixed(0)}mm',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.teal.shade700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            bottomTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                reservedSize: 28,
+                                interval: xInterval,
+                                getTitlesWidget: (value, meta) {
+                                  final date =
+                                      DateTime.fromMillisecondsSinceEpoch(
+                                        value.toInt(),
+                                      );
+                                  return Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(
+                                      '${date.hour.toString().padLeft(2, '0')}:00',
+                                      style: const TextStyle(fontSize: 9),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          lineBarsData: [
+                            LineChartBarData(
+                              spots: levelSpots,
+                              isCurved: false,
+                              color: Colors.blue,
+                              barWidth: 2,
+                              dotData: const FlDotData(show: false),
+                            ),
+                            LineChartBarData(
+                              spots: scaledRainfallSpots,
+                              isCurved: false,
+                              color: Colors.teal,
+                              barWidth: 2,
+                              dashArray: const [6, 4],
+                              dotData: const FlDotData(show: false),
+                            ),
+                          ],
+                          extraLinesData: ExtraLinesData(
+                            horizontalLines: [
+                              HorizontalLine(
+                                y: site.dangerLevel,
+                                color: Colors.red,
+                                strokeWidth: 2,
+                                dashArray: const [8, 4],
+                                label: HorizontalLineLabel(
+                                  show: true,
+                                  alignment: Alignment.topRight,
+                                  style: const TextStyle(
+                                    color: Colors.red,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  labelResolver: (_) =>
+                                      'Danger: ${site.dangerLevel}m',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(width: 16, height: 2, color: Colors.blue),
+                        const SizedBox(width: 4),
+                        const Text(
+                          'Water Level',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF1A1A1A),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 0; i < 3; i++) ...[
+                              Container(
+                                width: 4,
+                                height: 2,
+                                color: Colors.teal,
+                              ),
+                              const SizedBox(width: 2),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(width: 2),
+                        const Text(
+                          'Rainfall',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF1A1A1A),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1778,7 +2533,10 @@ class _WeatherSectionState extends State<_WeatherSection> {
                   const SizedBox(height: 4),
                   Text(
                     'As of ${_formatTimestamp(latest.timestamp)}',
-                    style: const TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ],
@@ -1847,7 +2605,10 @@ class _StatusBarChart extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
                       labels[index],
-                      style: const TextStyle(fontSize: 10, color: Color(0xFF1A1A1A)),
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF1A1A1A),
+                      ),
                     ),
                   );
                 },
@@ -1917,7 +2678,10 @@ class _StatusPieChart extends StatelessWidget {
       return const SizedBox(
         height: 120,
         child: Center(
-          child: Text('No readings yet', style: TextStyle(color: Color(0xFF1A1A1A))),
+          child: Text(
+            'No readings yet',
+            style: TextStyle(color: Color(0xFF1A1A1A)),
+          ),
         ),
       );
     }
@@ -1971,9 +2735,21 @@ class _StatusPieChart extends StatelessWidget {
           runSpacing: 4,
           alignment: WrapAlignment.center,
           children: [
-            _PieLegendEntry(color: Colors.green, label: 'Approved', count: approved),
-            _PieLegendEntry(color: Colors.orange, label: 'Pending', count: pending),
-            _PieLegendEntry(color: Colors.red, label: 'Rejected', count: rejected),
+            _PieLegendEntry(
+              color: Colors.green,
+              label: 'Approved',
+              count: approved,
+            ),
+            _PieLegendEntry(
+              color: Colors.orange,
+              label: 'Pending',
+              count: pending,
+            ),
+            _PieLegendEntry(
+              color: Colors.red,
+              label: 'Rejected',
+              count: rejected,
+            ),
           ],
         ),
       ],
@@ -2012,11 +2788,296 @@ class _PieLegendEntry extends StatelessWidget {
   }
 }
 
+// Feature 3 — derives the state abbreviation from a siteCode like
+// "CWC-TN-001" (the same prefix convention cwc_excel_generator.dart's
+// _stateInfo already relies on). Returns null for a siteCode that doesn't
+// match the expected "CWC-<STATE>-<NNN>" shape.
+String? _stateAbbrFromSiteCode(String siteCode) {
+  final parts = siteCode.split('-');
+  if (parts.length < 2) return null;
+  return parts[1];
+}
+
+/// Feature 3 — three side-by-side cards (Tamil Nadu / Kerala / Karnataka),
+/// each showing that state's site count, a red/orange/yellow/normal
+/// breakdown (reusing Reading.calculateWarningLevel's exact thresholds —
+/// no threshold logic duplicated here), and a border colored by that
+/// state's single worst active warning level.
+class _StateWiseOverviewSection extends StatelessWidget {
+  const _StateWiseOverviewSection({
+    required this.sites,
+    required this.allReadings,
+  });
+
+  final List<Site> sites;
+  final List<Reading> allReadings;
+
+  static const _stateAbbrs = ['TN', 'KL', 'KA'];
+
+  @override
+  Widget build(BuildContext context) {
+    final latestBySite = <String, Reading>{};
+    for (final r in allReadings) {
+      final level = r.manualLevel ?? r.aiDetectedLevel;
+      if (level == null) continue;
+      latestBySite.putIfAbsent(r.siteId, () => r);
+    }
+
+    return Row(
+      children: [
+        for (final abbr in _stateAbbrs) ...[
+          Expanded(
+            child: _StateCard(
+              abbr: abbr,
+              sites: sites
+                  .where((s) => _stateAbbrFromSiteCode(s.siteCode) == abbr)
+                  .toList(),
+              latestBySite: latestBySite,
+            ),
+          ),
+          if (abbr != _stateAbbrs.last) const SizedBox(width: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _StateCard extends StatelessWidget {
+  const _StateCard({
+    required this.abbr,
+    required this.sites,
+    required this.latestBySite,
+  });
+
+  final String abbr;
+  final List<Site> sites;
+  final Map<String, Reading> latestBySite;
+
+  @override
+  Widget build(BuildContext context) {
+    var redCount = 0;
+    var orangeCount = 0;
+    var yellowCount = 0;
+    var normalCount = 0;
+    for (final site in sites) {
+      final reading = latestBySite[site.siteId];
+      final level = reading?.manualLevel ?? reading?.aiDetectedLevel;
+      switch (Reading.calculateWarningLevel(level, site.dangerLevel)) {
+        case 'red':
+          redCount++;
+          break;
+        case 'orange':
+          orangeCount++;
+          break;
+        case 'yellow':
+          yellowCount++;
+          break;
+        default:
+          normalCount++;
+      }
+    }
+
+    final Color borderColor;
+    if (redCount > 0) {
+      borderColor = Colors.red;
+    } else if (orangeCount > 0) {
+      borderColor = Colors.orange;
+    } else if (yellowCount > 0) {
+      borderColor = Colors.amber.shade700;
+    } else {
+      borderColor = AppColors.outlineVariant;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusStandard),
+        border: Border.all(
+          color: borderColor,
+          width: redCount + orangeCount + yellowCount > 0 ? 2 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            abbr,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              color: Color(0xFF1A1A1A),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '${sites.length} site${sites.length == 1 ? '' : 's'}',
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              if (redCount > 0) _WarningDot(color: Colors.red, count: redCount),
+              if (orangeCount > 0)
+                _WarningDot(color: Colors.orange, count: orangeCount),
+              if (yellowCount > 0)
+                _WarningDot(color: Colors.amber.shade700, count: yellowCount),
+              if (normalCount > 0)
+                _WarningDot(color: Colors.green, count: normalCount),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WarningDot extends StatelessWidget {
+  const _WarningDot({required this.color, required this.count});
+
+  final Color color;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 3),
+        Text(
+          '$count',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _SiteLevelEntry {
-  const _SiteLevelEntry(this.site, this.level);
+  const _SiteLevelEntry(
+    this.site,
+    this.level,
+    this.rateOfRisePerHour,
+    this.hasEnoughReadingsForRate,
+  );
 
   final Site site;
   final double level;
+  // null when hasEnoughReadingsForRate is false (fewer than 2 usable
+  // readings for this site) — see _rateOfRiseDisplay/_dangerEtaPill below.
+  final double? rateOfRisePerHour;
+  final bool hasEnoughReadingsForRate;
+}
+
+// ---- Feature 1: Rate of Rise ----
+//
+// Uses the two most recent readings (by timestamp) with a usable level for
+// a site to compute a simple linear rate of change, in meters/hour.
+// [newestFirstReadings] must already be sorted newest-first.
+double? _rateOfRisePerHour(List<Reading> newestFirstReadings) {
+  if (newestFirstReadings.length < 2) return null;
+  final latest = newestFirstReadings[0];
+  final previous = newestFirstReadings[1];
+  final latestLevel = latest.manualLevel ?? latest.aiDetectedLevel;
+  final previousLevel = previous.manualLevel ?? previous.aiDetectedLevel;
+  if (latestLevel == null || previousLevel == null) return null;
+  final hours =
+      latest.timestamp.difference(previous.timestamp).inMinutes / 60.0;
+  if (hours <= 0) return null;
+  return (latestLevel - previousLevel) / hours;
+}
+
+({String text, Color color, bool bold}) _rateOfRiseDisplay(
+  double? rate,
+  bool hasEnoughReadings,
+) {
+  if (!hasEnoughReadings || rate == null) {
+    return (
+      text: 'Insufficient data',
+      color: Colors.grey.shade600,
+      bold: false,
+    );
+  }
+  if (rate > 0.5) {
+    return (
+      text: 'Rising fast +${rate.toStringAsFixed(1)}m/hr',
+      color: Colors.red.shade700,
+      bold: true,
+    );
+  }
+  if (rate >= 0.1) {
+    return (
+      text: 'Rising +${rate.toStringAsFixed(1)}m/hr',
+      color: Colors.orange.shade800,
+      bold: false,
+    );
+  }
+  if (rate <= -0.1) {
+    // rate is already negative, so toStringAsFixed already includes the
+    // "-" sign — no need to prepend one as with the rising cases above.
+    return (
+      text: 'Falling ${rate.toStringAsFixed(1)}m/hr',
+      color: Colors.green.shade700,
+      bold: false,
+    );
+  }
+  return (text: 'Stable', color: Colors.grey.shade600, bold: false);
+}
+
+// ---- Feature 2: Time to Danger ----
+//
+// Returns null when the site is already in alert, the rate isn't
+// positive, or the estimate is 24h+ out — in every one of those cases the
+// pill simply isn't shown, per spec.
+Widget? _dangerEtaPill(double? rate, double currentLevel, double dangerLevel) {
+  if (rate == null || rate <= 0) return null;
+  if (currentLevel >= dangerLevel) return null;
+
+  final hoursRemaining = (dangerLevel - currentLevel) / rate;
+  if (hoursRemaining >= 24) return null;
+
+  final Color color;
+  final String text;
+  if (hoursRemaining < 2) {
+    final totalMinutes = (hoursRemaining * 60).round();
+    final h = totalMinutes ~/ 60;
+    final m = totalMinutes % 60;
+    text = 'Danger in ~${h}h ${m}m';
+    color = Colors.red.shade700;
+  } else if (hoursRemaining < 6) {
+    text = 'Danger in ~${hoursRemaining.round()}h';
+    color = Colors.orange.shade800;
+  } else {
+    text = 'Danger in ~${hoursRemaining.round()}h';
+    color = Colors.amber.shade800;
+  }
+
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.15),
+      borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+      border: Border.all(color: color),
+    ),
+    child: Text(
+      text,
+      style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 10),
+    ),
+  );
 }
 
 /// Horizontal comparison of the latest recorded water level at every site,
@@ -2034,21 +3095,31 @@ class _AllSitesLevelChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // allReadings is already newest-first (the same top-100 stream that
-    // feeds the rest of this dashboard), so the first match per site here
-    // is that site's latest reading with a usable level.
-    final latestBySite = <String, Reading>{};
+    // feeds the rest of this dashboard), so each per-site list built below
+    // preserves that order too — readingsBySite[x].first is that site's
+    // latest usable reading, .first/.second feed the rate-of-rise calc.
+    final readingsBySite = <String, List<Reading>>{};
     for (final r in allReadings) {
       final level = r.manualLevel ?? r.aiDetectedLevel;
       if (level == null) continue;
-      latestBySite.putIfAbsent(r.siteId, () => r);
+      (readingsBySite[r.siteId] ??= []).add(r);
     }
 
     final rows = <_SiteLevelEntry>[];
     for (final site in sites) {
-      final reading = latestBySite[site.siteId];
-      final level = reading?.manualLevel ?? reading?.aiDetectedLevel;
+      final siteReadings = readingsBySite[site.siteId];
+      if (siteReadings == null || siteReadings.isEmpty) continue;
+      final level =
+          siteReadings.first.manualLevel ?? siteReadings.first.aiDetectedLevel;
       if (level == null) continue;
-      rows.add(_SiteLevelEntry(site, level));
+      rows.add(
+        _SiteLevelEntry(
+          site,
+          level,
+          _rateOfRisePerHour(siteReadings),
+          siteReadings.length >= 2,
+        ),
+      );
     }
     rows.sort((a, b) => b.level.compareTo(a.level));
 
@@ -2066,7 +3137,8 @@ class _AllSitesLevelChart extends StatelessWidget {
 
     final maxScale = rows.fold<double>(
       0,
-      (acc, r) => [acc, r.level, r.site.dangerLevel].reduce((a, b) => a > b ? a : b),
+      (acc, r) =>
+          [acc, r.level, r.site.dangerLevel].reduce((a, b) => a > b ? a : b),
     );
 
     return Column(
@@ -2075,65 +3147,111 @@ class _AllSitesLevelChart extends StatelessWidget {
         for (final row in rows)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: 90,
-                  child: Text(
-                    row.site.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF1A1A1A)),
-                  ),
-                ),
-                Expanded(
-                  child: Builder(
-                    builder: (context) {
-                      final ratio = row.site.dangerLevel > 0
-                          ? row.level / row.site.dangerLevel
-                          : 0.0;
-                      final color = ratio >= 1.0
-                          ? Colors.red
-                          : ratio >= 0.7
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 90,
+                      child: Text(
+                        row.site.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF1A1A1A),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Builder(
+                        builder: (context) {
+                          final ratio = row.site.dangerLevel > 0
+                              ? row.level / row.site.dangerLevel
+                              : 0.0;
+                          final color = ratio >= 1.0
+                              ? Colors.red
+                              : ratio >= 0.7
                               ? Colors.amber.shade700
                               : Colors.green;
-                      final widthFactor = maxScale > 0
-                          ? (row.level / maxScale).clamp(0.0, 1.0)
-                          : 0.0;
-                      return Stack(
-                        children: [
-                          Container(
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          ),
-                          FractionallySizedBox(
-                            widthFactor: widthFactor,
-                            child: Container(
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: color,
-                                borderRadius: BorderRadius.circular(4),
+                          final widthFactor = maxScale > 0
+                              ? (row.level / maxScale).clamp(0.0, 1.0)
+                              : 0.0;
+                          return Stack(
+                            children: [
+                              Container(
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade200,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 48,
-                  child: Text(
-                    '${row.level.toStringAsFixed(1)}m',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF1A1A1A),
+                              FractionallySizedBox(
+                                widthFactor: widthFactor,
+                                child: Container(
+                                  height: 18,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 48,
+                      child: Text(
+                        '${row.level.toStringAsFixed(1)}m',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1A1A1A),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                // Feature 1: rate of rise, below the site name.
+                Builder(
+                  builder: (context) {
+                    final rateInfo = _rateOfRiseDisplay(
+                      row.rateOfRisePerHour,
+                      row.hasEnoughReadingsForRate,
+                    );
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        rateInfo.text,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: rateInfo.bold
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                          color: rateInfo.color,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                // Feature 2: time-to-danger pill, below the rate-of-rise
+                // line — omitted entirely (per spec) when not applicable.
+                Builder(
+                  builder: (context) {
+                    final pill = _dangerEtaPill(
+                      row.rateOfRisePerHour,
+                      row.level,
+                      row.site.dangerLevel,
+                    );
+                    if (pill == null) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: pill,
+                    );
+                  },
                 ),
               ],
             ),
@@ -2175,10 +3293,7 @@ class _SubmissionHeatmap extends StatelessWidget {
       }
     }
 
-    final maxCount = countByDay.values.fold<int>(
-      0,
-      (a, b) => a > b ? a : b,
-    );
+    final maxCount = countByDay.values.fold<int>(0, (a, b) => a > b ? a : b);
 
     return Wrap(
       spacing: 4,
