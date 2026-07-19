@@ -26,6 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _isLoading = false;
   bool _isSeeding = false;
+  bool _obscurePassword = true;
   String? _errorMessage;
 
   @override
@@ -51,8 +52,10 @@ class _LoginScreenState extends State<LoginScreen> {
       // Fire-and-forget, now that we know who's signed in — must never
       // block or fail the login flow if push registration has trouble.
       unawaited(NotificationService().initialize());
-      final doc =
-          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
       final role = doc.data()?['role'] as String?;
 
       if (!mounted) return;
@@ -453,6 +456,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
                         enabled: !_isLoading,
+                        style: const TextStyle(color: Colors.black87),
                         decoration: const InputDecoration(
                           hintText: 'you@example.com',
                           prefixIcon: Icon(Icons.mail_outline),
@@ -463,10 +467,22 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 8),
                       TextField(
                         controller: _passwordController,
-                        obscureText: true,
+                        obscureText: _obscurePassword,
                         enabled: !_isLoading,
-                        decoration: const InputDecoration(
-                          hintText: '••••••••',
+                        style: const TextStyle(color: Colors.black87),
+                        decoration: InputDecoration(
+                          hintText: '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022',
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                              color: Colors.grey,
+                            ),
+                            onPressed: () => setState(
+                              () => _obscurePassword = !_obscurePassword,
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(height: 24),

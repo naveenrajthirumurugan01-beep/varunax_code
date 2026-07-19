@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../satellite_overlay_screen.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/reading_model.dart';
 import '../../models/site_model.dart';
@@ -34,10 +35,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
   bool _alertsInitialized = false;
 
   // Compares this snapshot of active alerts against the previous one (tracked
-  // via _seenAlertIds) and pops up a dialog for any reading that wasn't there
-  // before. The very first snapshot just establishes the baseline — otherwise
-  // every pre-existing alert would trigger a popup the moment this screen
-  // opens.
+  // via _seenAlertIds) and shows ONE consolidated dialog for all new alerts.
+  // The very first snapshot just establishes the baseline — otherwise every
+  // pre-existing alert would trigger a popup the moment this screen opens.
   void _handleAlertReadings(
     List<Reading> alertReadings,
     Map<String, Site> siteById,
@@ -55,31 +55,35 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
     _seenAlertIds.addAll(newAlerts.map((r) => r.readingId));
 
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      for (final reading in newAlerts) {
-        if (!mounted) return;
-        final siteName = siteById[reading.siteId]?.name ?? reading.siteId;
-        await showDialog<void>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text(
-              '⚠️ Water Level Alert',
-              style: TextStyle(color: Color(0xFF000000)),
-            ),
-            content: Text(
-              '⚠️ Water Level Alert — $siteName has exceeded its danger '
-              'threshold',
-              style: const TextStyle(color: Color(0xFF1A1A1A)),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('OK'),
-              ),
-            ],
+    // Show ONE dialog regardless of how many new alerts there are.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final siteNames = newAlerts
+          .map((r) => siteById[r.siteId]?.name ?? r.siteId)
+          .toSet()
+          .join(', ');
+      final count = newAlerts.length;
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text(
+            '\u26a0\ufe0f Water Level Alert',
+            style: TextStyle(color: Color(0xFF000000)),
           ),
-        );
-      }
+          content: Text(
+            count == 1
+                ? '\u26a0\ufe0f $siteNames has exceeded its danger threshold.'
+                : '\u26a0\ufe0f $count new readings exceed the danger threshold\n($siteNames).',
+            style: const TextStyle(color: Color(0xFF1A1A1A)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     });
   }
 
@@ -122,88 +126,84 @@ class _ReviewScreenState extends State<ReviewScreen> {
                   ),
                 ],
               ),
-              body: Column(
-                children: [
-                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    // Equality filter only (no orderBy on a second field),
-                    // same convention used elsewhere in this app to avoid
-                    // requiring a composite Firestore index — sorted
-                    // client-side below.
-                    stream: FirebaseFirestore.instance
-                        .collection('readings')
-                        .where('isAlert', isEqualTo: true)
-                        .snapshots(),
-                    builder: (context, alertSnapshot) {
-                      final alertDocs = alertSnapshot.data?.docs ?? [];
-                      final alertReadings =
-                          alertDocs
-                              .map(
-                                (doc) => Reading.fromMap({
-                                  ...doc.data(),
-                                  'readingId': doc.id,
-                                }),
-                              )
-                              .toList()
-                            ..sort(
-                              (a, b) => b.timestamp.compareTo(a.timestamp),
-                            );
+              body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('readings')
+                    .where('isAlert', isEqualTo: true)
+                    .snapshots(),
+                builder: (context, alertSnapshot) {
+                  final alertDocs = alertSnapshot.data?.docs ?? [];
+                  final alertReadings = alertDocs
+                      .map((doc) => Reading.fromMap(
+                            {...doc.data(), 'readingId': doc.id},
+                          ))
+                      .toList()
+                    ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
-                      _handleAlertReadings(alertReadings, siteById);
+                  _handleAlertReadings(alertReadings, siteById);
 
-                      return _AlertBanner(
-                        readings: alertReadings,
-                        siteById: siteById,
-                      );
-                    },
-                  ),
-                  Expanded(
-                    child: Builder(
-                      builder: (context) {
-                        if (pendingSnapshot.hasError) {
-                          return Center(
-                            child: Text(
-                              'Failed to load readings: '
-                              '${pendingSnapshot.error}',
-                              style: const TextStyle(color: Color(0xFF1A1A1A)),
-                            ),
-                          );
-                        }
-                        if (pendingSnapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
-                          );
-                        }
-                        if (pendingDocs.isEmpty) {
-                          return const Center(
+                  // ── Single scrollable body ──────────────────────────────────
+                  // Alert banner + reading cards are all children of ONE
+                  // CustomScrollView so they scroll together continuously.
+                  // Nothing is pinned / Expanded so nothing can hide behind
+                  // a fixed overlay.
+                  if (pendingSnapshot.hasError) {
+                    return Center(
+                      child: Text(
+                        'Failed to load readings: ${pendingSnapshot.error}',
+                        style: const TextStyle(color: Color(0xFF1A1A1A)),
+                      ),
+                    );
+                  }
+                  if (pendingSnapshot.connectionState ==
+                      ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final readings = (pendingSnapshot.data?.docs ?? [])
+                      .map((doc) => Reading.fromMap(
+                            {...doc.data(), 'readingId': doc.id},
+                          ))
+                      .toList();
+
+                  return CustomScrollView(
+                    slivers: [
+                      // ── Alert banner (scrolls away with the rest) ──────────
+                      if (alertReadings.isNotEmpty)
+                        SliverToBoxAdapter(
+                          child: _AlertBanner(
+                            readings: alertReadings,
+                            siteById: siteById,
+                          ),
+                        ),
+
+                      // ── Empty state ────────────────────────────────────────
+                      if (readings.isEmpty)
+                        const SliverFillRemaining(
+                          child: Center(
                             child: Text(
                               'No pending readings',
                               style: TextStyle(color: Color(0xFF1A1A1A)),
                             ),
-                          );
-                        }
-
-                        final readings = pendingDocs
-                            .map(
-                              (doc) => Reading.fromMap({
-                                ...doc.data(),
-                                'readingId': doc.id,
-                              }),
-                            )
-                            .toList();
-
-                        return ListView.builder(
-                          padding: const EdgeInsets.all(12),
-                          itemCount: readings.length,
-                          itemBuilder: (context, index) => _ReadingCard(
-                            reading: readings[index],
-                            site: siteById[readings[index].siteId],
                           ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                        )
+                      else
+                        // ── Reading cards (one after the other) ───────────────
+                        SliverPadding(
+                          padding: const EdgeInsets.all(12),
+                          sliver: SliverList(
+                            delegate: SliverChildBuilderDelegate(
+                              (context, index) => _ReadingCard(
+                                reading: readings[index],
+                                site: siteById[readings[index].siteId],
+                              ),
+                              childCount: readings.length,
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
             );
           },
@@ -304,11 +304,38 @@ class _AlertBannerRow extends StatelessWidget {
   }
 }
 
-class _ReadingCard extends StatelessWidget {
+class _ReadingCard extends StatefulWidget {
   const _ReadingCard({required this.reading, required this.site});
 
   final Reading reading;
   final Site? site;
+
+  @override
+  State<_ReadingCard> createState() => _ReadingCardState();
+}
+
+class _ReadingCardState extends State<_ReadingCard> {
+  // Phase-3: stream the satellite doc for this reading's site so we can
+  // detect a ground-vs-satellite mismatch in real time.
+  Map<String, dynamic>? _satelliteData;
+
+  @override
+  void initState() {
+    super.initState();
+    FirebaseFirestore.instance
+        .collection('satellite_analysis')
+        .doc(widget.reading.siteId)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      setState(() => _satelliteData = snap.data());
+    });
+  }
+
+  // Convenience getters that forward to the immutable widget fields so the
+  // rest of the build method doesn't need to change.
+  Reading get reading => widget.reading;
+  Site?   get site    => widget.site;
 
   Future<void> _approve(BuildContext context) async {
     try {
@@ -351,6 +378,18 @@ class _ReadingCard extends StatelessWidget {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
         '${two(dt.hour)}:${two(dt.minute)}';
+  }
+
+  /// Phase-3 mismatch: satellite says critical flood (inundationRatio > 0.6)
+  /// but the ground reading is below 70% of the site's danger level.
+  bool get _hasMismatch {
+    final satData = _satelliteData;
+    if (satData == null) return false;
+    final riskStatus = (satData['satelliteRiskStatus'] as String?) ?? '';
+    if (riskStatus.toLowerCase() != 'critical') return false;
+    final groundLevel = reading.aiDetectedLevel ?? reading.manualLevel;
+    if (groundLevel == null || site == null) return false;
+    return groundLevel < site!.dangerLevel * 0.7;
   }
 
   @override
@@ -457,6 +496,81 @@ class _ReadingCard extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+            ],
+            // ── Phase 3: Ground vs Satellite MISMATCH warning ─────────────────
+            if (_hasMismatch) ...[
+              const SizedBox(height: 8),
+              InkWell(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => SatelliteOverlayScreen(siteId: reading.siteId),
+                  ),
+                ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.shade400),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.compare_arrows, color: Colors.orange.shade800, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '⚠️ Ground/Satellite Mismatch — Satellite radar shows CRITICAL '
+                          'flood conditions but ground reading is low. Gauge may be '
+                          'submerged or misread. Tap to verify with satellite overlay.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orange.shade900,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.chevron_right, color: Colors.orange.shade800, size: 16),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (reading.isAlert || reading.isSubmerged) ...[
+              const SizedBox(height: 8),
+              InkWell(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => SatelliteOverlayScreen(siteId: reading.siteId),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.purple.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.purple.shade300),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.satellite_alt, color: Colors.purple.shade700, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '⚠️ Ground measurements indicate high risk. Tap to cross-verify with Satellite Radar Telemetry.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.purple.shade800,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.chevron_right, color: Colors.purple.shade700, size: 16),
+                    ],
+                  ),
+                ),
               ),
             ],
             if (site != null) ...[

@@ -1,4 +1,4 @@
-﻿import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
@@ -9,6 +9,7 @@ import '../../models/site_model.dart';
 import '../../models/weather_reading_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/weather_service.dart';
+import '../satellite_overlay_screen.dart';
 import '../../utils/report_generator.dart';
 
 const _statusOptions = ['All', 'Pending', 'Approved', 'Rejected'];
@@ -904,6 +905,43 @@ class _ReadingCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+              ],
+              if (reading.isAlert || reading.isSubmerged) ...[
+                const SizedBox(height: 6),
+                InkWell(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => SatelliteOverlayScreen(siteId: reading.siteId),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.purple.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.purple.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.satellite_alt, color: Colors.purple.shade700, size: 14),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '⚠️ Ground risk high. Tap to view Satellite Radar Telemetry.',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.purple.shade800,
+                            ),
+                          ),
+                        ),
+                        Icon(Icons.chevron_right, color: Colors.purple.shade700, size: 14),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ],
